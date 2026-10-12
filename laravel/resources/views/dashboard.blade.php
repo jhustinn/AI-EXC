@@ -5,22 +5,34 @@
 
 @section('content')
 
-    {{-- ================= KPI ================= --}}
+    {{-- ============ KEUJURAN SISTEM ============ --}}
+    <div class="alert alert-warning d-flex align-items-start gap-2 mb-3 py-2 small">
+        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+        <div>
+            <strong>Fase masih inferensi, bukan pengamatan langsung.</strong>
+            Ukuran bucket belum dideteksi, jadi fase <em>Menuangkan</em> berarti
+            dump truck diam di tempat - itu korelasi, bukan bukti bucket
+            benar-benar menuung. Angka confidence di bawah adalah confidence
+            deteksi truck.
+        </div>
+    </div>
+
+    {{-- ============ KPI (dari engine Python) ============ --}}
     <div class="row g-3 mb-3">
         @php
-            $kpis = [
-                ['label' => 'Durasi Mengeruk', 'value' => '00:00:00', 'icon' => 'bi bi-arrow-down-circle',
-                 'bg' => 'bg-dig', 'delta' => '+0%', 'sub' => 'dari periode sebelumnya'],
-                ['label' => 'Durasi Menuangkan', 'value' => '00:00:00', 'icon' => 'bi bi-truck',
-                 'bg' => 'bg-dump', 'delta' => '+0%', 'sub' => 'dari periode sebelumnya'],
-                ['label' => 'Jumlah Siklus', 'value' => '0 siklus', 'icon' => 'bi bi-arrow-repeat',
-                 'bg' => 'bg-cycle', 'delta' => '+0%', 'sub' => 'dari periode sebelumnya'],
-                ['label' => 'Waktu Idle', 'value' => '00:00:00', 'icon' => 'bi bi-clock',
-                 'bg' => 'bg-idle', 'delta' => '+0%', 'sub' => 'dari periode sebelumnya'],
+            $kpi = [
+                ['label' => 'Durasi Mengeruk', 'icon' => 'bi bi-arrow-down-circle',
+                 'bg' => 'bg-dig',   'id' => 'kpiMengeruk'],
+                ['label' => 'Durasi Menuangkan', 'icon' => 'bi bi-truck',
+                 'bg' => 'bg-dump',  'id' => 'kpiMenuangkan'],
+                ['label' => 'Jumlah Siklus', 'icon' => 'bi bi-arrow-repeat',
+                 'bg' => 'bg-cycle', 'id' => 'kpiSiklus'],
+                ['label' => 'Waktu Idle', 'icon' => 'bi bi-clock',
+                 'bg' => 'bg-idle',  'id' => 'kpiIdle'],
             ];
         @endphp
 
-        @foreach ($kpis as $k)
+        @foreach ($kpi as $k)
             <div class="col-12 col-sm-6 col-xl-3">
                 <div class="kpi d-flex gap-3">
                     <div class="kpi-icon {{ $k['bg'] }}">
@@ -28,41 +40,40 @@
                     </div>
                     <div class="min-w-0">
                         <div class="kpi-label">{{ $k['label'] }}</div>
-                        <div class="kpi-value">{{ $k['value'] }}</div>
-                        <div class="kpi-delta up"><i class="bi bi-arrow-up-short"></i>{{ $k['delta'] }}</div>
-                        <div class="kpi-sub">{{ $k['sub'] }}</div>
+                        <div class="kpi-value" id="{{ $k['id'] }}">00:00:00</div>
+                        <div class="kpi-sub">terukur engine</div>
                     </div>
                 </div>
             </div>
         @endforeach
     </div>
 
-    {{-- ================= LIVE + HASIL DETEKSI ================= --}}
+    {{-- ============ LIVE + STATUS FASE ============ --}}
     <div class="row g-3 mb-3">
         <div class="col-12 col-xl-7">
             <div class="panel h-100">
                 <div class="panel-head">
                     <h2 class="panel-title">
-                        Live Camera &mdash; Cabin View
-                        <span class="text-secondary fw-normal">({{ $unit ?? 'EXC-07' }})</span>
+                        Live Camera <span class="text-secondary fw-normal">({{ $unit }})</span>
                     </h2>
-                    <span class="badge text-bg-success-subtle text-success-emphasis">
-                        <i class="bi bi-circle-fill" style="font-size:.55rem"></i> Live
+                    <span class="badge text-bg-success-subtle text-success-emphasis" id="engineBadge">
+                        <i class="bi bi-circle-fill" style="font-size:.55rem"></i>
+                        <span id="engineBadgeText">connecting...</span>
                     </span>
                 </div>
                 <div class="p-3">
                     <div class="live-wrap">
-                        {{-- Sumber stream.engine Python, bukan di-proxy lewat PHP. --}}
+                        {{-- Stream dilayani Python langsung; tidak lewat PHP. --}}
                         <img id="liveImage"
-                             src="{{ config('hera.stream_url') }}/stream"
-                             alt="Live camera cabin view"
-                             onerror="document.getElementById('liveHint').style.display='block'">
-                        <span class="live-badge">{{ now()->format('d/m/Y H:i:s') }}</span>
-                        <span class="rec-dot"><i class="bi bi-record-fill"></i> REC</span>
+                             src="{{ rtrim(config('hera.stream_url'), '/') }}/stream"
+                             alt="Live camera {{ $unit }}"
+                             onload="herraStreamOK()"
+                             onerror="herraStreamError()">
+                        <span class="rec-dot"><i class="bi bi-record-fill"></i> LIVE</span>
                         <div id="liveHint" class="position-absolute bottom-0 start-0 end-0 p-2 text-center"
                              style="display:none">
                             <span class="badge text-bg-dark">
-                                Stream belum tersedia &mdash; engine Python belum jalan
+                                Stream belum tersedia - engine Python belum jalan
                             </span>
                         </div>
                     </div>
@@ -73,103 +84,61 @@
         <div class="col-12 col-xl-5">
             <div class="panel h-100">
                 <div class="panel-head">
-                    <h2 class="panel-title">Hasil Deteksi AI (Realtime)</h2>
+                    <h2 class="panel-title">Status Aktivitas</h2>
                 </div>
-                <div class="p-3">
-                    <div class="row g-3">
-                        <div class="col-12 col-sm-6">
-                            <div class="detect-card">
-                                <img src="{{ asset('img/placeholder-dig.svg') }}" alt="Deteksi mengguk">
-                                <span class="detect-tag">MENGERUK</span>
-                            </div>
-                            <div class="detect-foot">
-                                <div class="d-flex justify-content-between align-items-start">
-                                    <div>
-                                        <div class="detect-name"><i class="bi bi-wrench-adjustable"></i> Mengeruk (Digging)</div>
-                                        <div class="detect-desc">Sedang melakukan aktivitas mengguk material</div>
-                                    </div>
-                                    <span class="badge text-bg-success">0%</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-12 col-sm-6">
-                            <div class="detect-card dump">
-                                <img src="{{ asset('img/placeholder-dump.svg') }}" alt="Deteksi menuangkan">
-                                <span class="detect-tag">MENUANGKAN</span>
-                            </div>
-                            <div class="detect-foot">
-                                <div class="d-flex justify-content-between align-items-start">
-                                    <div>
-                                        <div class="detect-name"><i class="bi bi-truck"></i> Menuangkan (Dumping)</div>
-                                        <div class="detect-desc">Sedang menuangkan material ke truck</div>
-                                    </div>
-                                    <span class="badge text-bg-warning">0%</span>
-                                </div>
-                            </div>
-                        </div>
+                <div class="p-3" id="panelStatus">
+                    <div class="text-center py-4 text-secondary" id="statusLoading">
+                        <i class="bi bi-hourglass-split fs-2 d-block mb-2"></i>
+                        Menunggu engine deteksi
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    {{-- ================= TRACE ================= --}}
+    {{-- ============ TRACE FASE ============ --}}
     <div class="panel mb-3">
         <div class="panel-head">
-            <h2 class="panel-title">Urutan Aktivitas Terakhir</h2>
+            <h2 class="panel-title">Urutan Aktivitas Siklus</h2>
+            <span class="small text-secondary" id="traceNote">5 fase</span>
         </div>
         <div class="p-3">
-            @php
-                $steps = [
-                    ['label' => 'Mengangkat', 'time' => '--:--:--', 'on' => false],
-                    ['label' => 'Mengeruk', 'time' => '--:--:--', 'on' => true],
-                    ['label' => 'Memutar', 'time' => '--:--:--', 'on' => false],
-                    ['label' => 'Menuangkan', 'time' => '--:--:--', 'on' => true, 'dump' => true],
-                    ['label' => 'Kembali', 'time' => '--:--:--', 'on' => false],
-                ];
-            @endphp
             <div class="trace">
-                @foreach ($steps as $i => $s)
-                    @if ($i > 0)
-                        <i class="bi bi-arrow-right trace-arrow"></i>
-                    @endif
-                    <div class="trace-step {{ $s['on'] ? 'on' : '' }} {{ !empty($s['dump']) ? 'dump' : '' }}">
-                        <img class="thumb" src="{{ asset('img/placeholder-step.svg') }}" alt="{{ $s['label'] }}">
-                        <div class="label">{{ $s['label'] }}</div>
-                        <div class="time">{{ $s['time'] }}</div>
+                @foreach (['Mengangkat', 'Mengeruk', 'Memutar', 'Menuangkan', 'Kembali'] as $s)
+                    <div class="trace-step" data-fase="{{ \Illuminate\Support\Str::slug($s) }}">
+                        <div class="thumb d-flex align-items-center justify-content-center"
+                             style="height:58px;border-radius:8px;border:2px solid #cbd5e1;background:#0b1220">
+                            <i class="bi bi-circle text-secondary"></i>
+                        </div>
+                        <div class="label">{{ $s }}</div>
+                        <div class="time">-</div>
                     </div>
+                    @if (! $loop->last)<i class="bi bi-arrow-right trace-arrow"></i>@endif
                 @endforeach
             </div>
         </div>
     </div>
 
-    {{-- ================= RIWAYAT ================= --}}
+    {{-- ============ RIWAYAT ============ --}}
     <div class="panel mb-4">
         <div class="panel-head">
             <h2 class="panel-title">Riwayat Deteksi Aktivitas</h2>
-            <div class="d-flex gap-2">
-                <a href="#" class="btn btn-primary btn-sm"><i class="bi bi-play-circle"></i> Lihat Video</a>
-                <button class="btn btn-outline-secondary btn-sm"><i class="bi bi-download"></i> Export</button>
-            </div>
+            <button class="btn btn-outline-secondary btn-sm" onclick="herraMuatRiwayat()">
+                <i class="bi bi-arrow-clockwise"></i> Muat
+            </button>
         </div>
         <div class="table-responsive">
             <table class="table table-sm mb-0 align-middle">
                 <thead class="table-light">
                     <tr>
-                        <th>No.</th>
-                        <th>Waktu Mulai</th>
-                        <th>Waktu Selesai</th>
-                        <th>Durasi</th>
-                        <th>Jenis Aktivitas</th>
-                        <th>Confidence</th>
-                        <th></th>
-                        <th>Status</th>
+                        <th>No.</th><th>Waktu Mulai</th><th>Waktu Selesai</th>
+                        <th>Durasi</th><th>Fase</th><th>Truck Conf.</th><th>Gerak Zona Gali</th>
                     </tr>
                 </thead>
                 <tbody id="riwayatBody">
                     <tr>
-                        <td colspan="8" class="text-center text-secondary py-4">
-                            Belum ada riwayat. Riwayat akan terisi setelah engine deteksi berjalan.
+                        <td colspan="7" class="text-center text-secondary py-4">
+                            Belum ada riwayat.
                         </td>
                     </tr>
                 </tbody>
@@ -178,3 +147,134 @@
     </div>
 
 @endsection
+
+@push('scripts')
+<script>
+const HERRA_API = @json(rtrim(config('hera.api_url'), '/'));
+
+function herraDurasi(detik) {
+    detik = Math.max(0, Math.floor(detik || 0));
+    const j = Math.floor(detik / 3600);
+    const m = Math.floor((detik % 3600) / 60);
+    const d = detik % 60;
+    return [j, m, d].map(n => String(n).padStart(2, '0')).join(':');
+}
+
+function herraWaktu(iso) {
+    if (!iso) return '-';
+    const t = new Date(iso);
+    return isNaN(t) ? '-' : t.toLocaleTimeString('id-ID', {hour12: false});
+}
+
+function herraStreamError() {
+    document.getElementById('liveHint').style.display = 'block';
+    document.getElementById('engineBadgeText').textContent = 'engine offline';
+    document.getElementById('engineBadge').className = 'badge text-bg-secondary';
+}
+
+// Stream MJPEG bisa sempat putus sebentar lalu nyambung lagi,
+// jadi hint disembunyikan lagi begitu frame masuk lagi.
+function herraStreamOK() {
+    document.getElementById('liveHint').style.display = 'none';
+}
+
+function herraMuatStatus() {
+    fetch(HERRA_API + '/api/status')
+        .then(r => r.json())
+        .then(d => {
+            document.getElementById('engineBadge').className =
+                'badge text-bg-success-subtle text-success-emphasis';
+            document.getElementById('engineBadgeText').textContent = 'AI Online';
+
+            document.getElementById('kpiMengeruk').textContent =
+                herraDurasi(d.kpi.durasi_mengeruk);
+            document.getElementById('kpiMenuangkan').textContent =
+                herraDurasi(d.kpi.durasi_menuangkan);
+            document.getElementById('kpiIdle').textContent =
+                herraDurasi(d.kpi.waktu_idle);
+            document.getElementById('kpiSiklus').textContent =
+                d.kpi.jumlah_siklus + ' siklus';
+
+            document.getElementById('panelStatus').innerHTML = herraKartuFase(d);
+            herraTandaiTrace(d.fase);
+        })
+        .catch(herraStreamError);
+}
+
+function herraKartuFase(d) {
+    const pct = Math.round((d.truck_confidence || 0) * 100);
+    const adaTruck = pct > 0;
+    const badge = adaTruck
+        ? '<span class="badge text-bg-warning">' + pct + '%</span>'
+        : '<span class="badge text-bg-secondary">tidak ada</span>';
+
+    let zona = '<div class="text-secondary small mt-2">Zona tuang: tidak aktif (tidak ada truck)</div>';
+    if (d.zona_tuang) {
+        zona = '<div class="text-secondary small mt-2">Zona tuang aktif di atas bak truck</div>';
+    }
+
+    return `
+        <div class="text-center py-2">
+            <div class="display-6 fw-bold" id="faseNama">${d.fase_label}</div>
+            <div class="text-secondary small mb-3">
+                berlangsung ${herraDurasi(d.durasi_fase_detik)}
+            </div>
+        </div>
+        <div class="d-flex justify-content-between align-items-center border-top pt-2">
+            <div>
+                <div class="fw-semibold"><i class="bi bi-truck"></i> Dump Truck</div>
+                <div class="small text-secondary">sumber sinyal: ${d.sumber_sinyal}</div>
+            </div>
+            ${badge}
+        </div>
+        <div class="d-flex justify-content-between align-items-center border-top pt-2 mt-2">
+            <div>
+                <div class="fw-semibold"><i class="bi bi-activity"></i> Energi Gerek Zona Gali</div>
+                <div class="small text-secondary">proxy aktivitas mengguk</div>
+            </div>
+            <span class="badge text-bg-info">${d.zona_gali_motion}</span>
+        </div>
+        ${zona}`;
+}
+
+function herraTandaiTrace(faseAktif) {
+    document.querySelectorAll('.trace-step').forEach(el => {
+        const on = el.dataset.fase === faseAktif;
+        const thumb = el.querySelector('.thumb');
+        const icon = el.querySelector('.thumb i');
+        thumb.style.borderColor = on ? '#16a34a' : '#cbd5e1';
+        icon.className = on ? 'bi bi-check-circle-fill text-success' : 'bi bi-circle text-secondary';
+        el.querySelector('.time').textContent = on ? 'sekarang' : '-';
+    });
+}
+
+function herraMuatRiwayat() {
+    fetch(HERRA_API + '/api/riwayat?limit=40')
+        .then(r => r.json())
+        .then(d => {
+            const tbody = document.getElementById('riwayatBody');
+            if (!d.events.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-secondary py-4">'
+                    + 'Belum ada riwayat.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = d.events.map((e, i) => `
+                <tr>
+                    <td>${i + 1}</td>
+                    <td>${herraWaktu(e.mulai)}</td>
+                    <td>${herraWaktu(e.selesai)}</td>
+                    <td class="fw-semibold">${herraDurasi(e.durasi)}</td>
+                    <td><span class="status-pill text-bg-light border">${e.fase_label}</span></td>
+                    <td>${Math.round(e.truck_confidence * 100)}%</td>
+                    <td class="text-secondary">${e.zona_gali_motion}</td>
+                </tr>`).join('');
+        })
+        .catch(() => {});
+}
+
+herraMuatStatus();
+herraMuatRiwayat();
+setInterval(herraMuatStatus, 2000);
+setInterval(herraMuatRiwayat, 15000);
+</script>
+@endpush

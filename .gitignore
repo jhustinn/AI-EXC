@@ -28,6 +28,10 @@ config.yaml.bak
 # Config CCTV berisi alamat & kredensial kamera
 config.cctv.yaml
 
+# Dataset training hasil ekstraksi frame (28 MB JPEG).
+# Bisa dibangkitkan ulang dari video dengan scripts/build_dataset.py
+datasets/
+
 # Folder referensi (video & screenshot target) - terlalu besar untuk repo
 INGIN SEPERTI INI/
 

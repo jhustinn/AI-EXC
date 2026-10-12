@@ -1,0 +1,45 @@
+# Konfigurasi mesin deteksi aktivitas alat berat.
+# Tidak ada kredensial di file ini. Untuk RTSP, ambil URL dari environment.
+
+timezone: Asia/Jakarta
+unit: EXC-07
+
+source:
+  # kind: video (uji, pakai file lokal) atau rtsp (kamera produksi)
+  kind: video
+  path: "INGIN SEPERTI INI/WhatsApp Video 2026-10-10 at 10.43.04 AM4.mp4"
+  loop: true
+  fps: 10
+
+detector:
+  model: yolov8n.pt
+  confidence: 0.35
+  iou: 0.5
+  device: "0"
+  imgsz: 640
+  classes: ["truck"]        # kelas COCO untuk dump truck
+  min_width_ratio: 0.15     # abaikan truck kecil di kejauhan
+
+zones:
+  # zona gali tetap, normalized [x1, y1, x2, y2]
+  dig: [0.05, 0.40, 0.95, 0.99]
+  # zona tuang mengikuti bbox truck -> pintu bak di bagian atas
+  dump_top_ratio: 0.12
+  dump_height_ratio: 0.60
+  motion_threshold: 0.012   # energi gerak di zona gali yang dianggap mengguk
+
+activity:
+  dump_min_seconds: 2.5     # truck diam sebegitu -> fase Menuangkan
+  dig_min_seconds: 3.0      # gerak di zona gali sebegitu -> fase Mengeruk
+  truck_gone_seconds: 4.0   # truck hilang sebegitu -> siklus selesai
+  idle_seconds: 5.0
+
+store:
+  # DSN dikosongkan; diisi lewat environment EXCAVATOR_DSN bila diperlukan
+  dsn: ""
+
+server:
+  host: "127.0.0.1"
+  port: 8010                # 8000 dipakai aplikasi lain di mesin ini
+  stream_fps: 12
+  stream_quality: 72
