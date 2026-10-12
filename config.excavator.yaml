@@ -12,13 +12,18 @@ source:
   fps: 10
 
 detector:
-  model: yolov8n.pt
+  # Model dilatih sendiri untuk bucket + excavator. Truck ikut dilatih dari
+  # label otomatis YOLO COCO supaya satu model cukup.
+  model: runs/alat_berat_v1/weights/best.pt
   confidence: 0.35          # ambang deteksi dipakai
   release_confidence: 0.20  # deteksi sekecil ini masih dipakai untuk posisi
   iou: 0.5
   device: "0"
   imgsz: 640
-  classes: ["truck"]        # kelas COCO untuk dump truck
+  classes: ["bucket", "excavator", "truck"]
+  # Plat nomor kecil, jadi confidence-nya dilonggarkan
+  low_conf_classes: ["plate"]
+  low_conf_floor: 0.18
   min_width_ratio: 0.15     # abaikan truck kecil di kejauhan
   # Confidence truck di video ini berayun 0,15-0,94 antar frame bersebelahan.
   # Tanpa penahanan, dashboard berkedip "tidak terdeteksi" 10% frame walau
@@ -42,6 +47,9 @@ activity:
   phase_min_seconds: 2.0    # kandidat fase harus bertahan ini dulu (debounce)
   dump_min_seconds: 2.5     # truck diam sebegitu -> fase Menuangkan
   dig_min_seconds: 3.0      # gerak di zona gali sebegitu -> fase Mengeruk
+  # Bucket dianggap mengguk bila di zona gali dan posisinya di bagian bawah
+  # frame (0 = atas, 1 = bawah).
+  bucket_low_ratio: 0.55
   idle_seconds: 5.0
 
 store:

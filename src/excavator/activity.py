@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from .config import ActivityConfig, ZoneConfig
-from .detector import Truck
+from .objek import Objek
 
 
 class Fase(str, Enum):
@@ -49,6 +49,8 @@ class EventAktivitas:
     fase: Fase = Fase.IDLE
     truck_conf: float = 0.0
     motion: float = 0.0
+    bucket_conf: float = 0.0
+    excavator_conf: float = 0.0
     siklus: int = 0
 
     @property
@@ -75,6 +77,12 @@ class Status:
     zona_tuang: tuple[float, float, float, float] | None = None
     zona_gali: tuple[float, float, float, float] | None = None
     sumber_sinyal: str = "truck"
+    # sinyal dari model kustom
+    bucket_conf: float = 0.0
+    bucket_di_zona_gali: bool = False
+    bucket_posisi: float | None = None   # 0 = atas frame, 1 = bawah
+    ekskavator_conf: float = 0.0
+    plate_conf: float = 0.0
 
     @property
     def durasi_fase(self) -> float:
@@ -129,13 +137,18 @@ class ActivityMachine:
         return kandidat if cukup else self.status.fase
 
     def _ganti_fase(self, fase: Fase, sekarang: datetime,
-                    conf: float, motion: float) -> None:
+                    conf: float, motion: float, hasil=None) -> None:
         if fase == self.status.fase:
             return
         if self.aktif:
             self.aktif.selesai = sekarang
             self.aktif.truck_conf = conf
             self.aktif.motion = motion
+            if hasil is not None:
+                self.aktif.bucket_conf = (hasil.buckets[0].conf
+                                           if hasil.buckets else 0.0)
+                self.aktif.excavator_conf = (hasil.ekskavator[0].conf
+                                             if hasil.ekskavator else 0.0)
             self._akumulasikan(self.aktif)
             self.riwayat.append(self.aktif)
             # Satu siklus = satu fase Menuangkan yang selesai dan bertahan
@@ -163,11 +176,42 @@ class ActivityMachine:
 
     # ---------- API utama ----------
 
-    def update(self, trucks: list[Truck], motion: float,
-               frame_shape: tuple[int, int]) -> Status:
+    def update(self, hasil, cfg) -> Status:
+        """Terima FrameResult lengkap.
+
+        Sinyal utama Mengeruk sekarang ADALAH bucket: bucket yang berada
+        di zona gali dan tinggi rendah berarti excavator sedang mengguk.
+        Dulu fase ini hanya ditebak dari energi gerak, yang tidak bisa
+        membedakan mengguk dari gerak kamera.
+        """
         sekarang = datetime.now(timezone.utc)
+        trucks = hasil.trucks
         truck = trucks[0] if trucks else None
         conf = truck.conf if truck else 0.0
+        motion = hasil.dig_motion
+        h, w = hasil.frame_shape
+
+        # ---- posisi bucket ----
+        bucket = hasil.buckets[0] if hasil.buckets else None
+        di_zona_gali = False
+        bucket_rendah = False
+        rasio_tinggi = 0.0
+        if bucket is not None and h:
+            zx1, zy1, zx2, zy2 = self.zones.dig
+            cxm, cym = bucket.cx / w, bucket.cy / h
+            di_zona_gali = zx1 <= cxm <= zx2 and zy1 <= cym <= zy2
+            # posisi vertikal bucket dalam frame, 0 = atas, 1 = bawah
+            rasio_tinggi = bucket.cy / h
+            bucket_rendah = rasio_tinggi >= self.cfg.bucket_low_ratio
+            self.status.bucket_di_zona_gali = di_zona_gali
+
+        bucket_ada = bucket is not None
+        gali_aktif = (bucket_ada and di_zona_gali and bucket_rendah) or (
+            motion >= self.zones.motion_threshold and not bucket_ada
+        )
+        self.status.sumber_sinyal = "bucket" if bucket_ada else (
+            "truck" if truck else "zona_gali"
+        )
 
         if truck:
             diam = self._truck_diam(truck)
@@ -207,14 +251,17 @@ class ActivityMachine:
         elif (sekarang - self._terakhir_aktivitas).total_seconds() >= self.cfg.idle_seconds:
             kandidat = Fase.IDLE
 
-        self._ganti_fase(self._stabil(kandidat, sekarang), sekarang, conf, motion)
+        self._ganti_fase(self._stabil(kandidat, sekarang), sekarang, conf, motion, hasil)
 
         # -------- publish status --------
         self.status.truck_conf = conf
         self.status.motion = motion
-        self.status.sumber_sinyal = "truck" if truck else "zona_gali"
+        self.status.bucket_conf = bucket.conf if bucket else 0.0
+        self.status.ekskavator_conf = (hasil.ekskavator[0].conf
+                                       if hasil.ekskavator else 0.0)
+        self.status.bucket_posisi = rasio_tinggi if bucket else None
+        self.status.plate_conf = (hasil.plates[0].conf if hasil.plates else 0.0)
 
-        h, w = frame_shape
         x1, y1, x2, y2 = self.zones.dig
         self.status.zona_gali = (x1 * w, y1 * h, x2 * w, y2 * h)
         self.status.zona_tuang = truck.dump_zone(self.zones) if truck else None
@@ -230,6 +277,8 @@ class ActivityMachine:
                 "fase": ev.fase.value,
                 "fase_label": FASE_LABEL[ev.fase],
                 "truck_confidence": round(ev.truck_conf, 3),
+                "bucket_confidence": round(ev.bucket_conf, 3),
+                "excavator_confidence": round(ev.excavator_conf, 3),
                 "zona_gali_motion": round(ev.motion, 4),
                 "siklus": ev.siklus,
             })
@@ -258,6 +307,11 @@ class ActivityMachine:
             "truck_confidence": round(s.truck_conf, 3),
             "zona_gali_motion": round(s.motion, 4),
             "sumber_sinyal": s.sumber_sinyal,
+            "bucket_confidence": round(s.bucket_conf, 3),
+            "bucket_di_zona_gali": s.bucket_di_zona_gali,
+            "bucket_posisi": round(s.bucket_posisi, 3) if s.bucket_posisi is not None else None,
+            "excavator_confidence": round(s.ekskavator_conf, 3),
+            "plate_confidence": round(s.plate_conf, 3),
             "zona_tuang": list(s.zona_tuang) if s.zona_tuang else None,
             "zona_gali": list(s.zona_gali) if s.zona_gali else None,
             "kpi": {

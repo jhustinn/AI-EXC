@@ -1,66 +1,23 @@
-"""Deteksi dump truck memakai YOLO COCO + energi gerak pada zona gali."""
+"""Mesin deteksi objek alat berat."""
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 from .config import DetectorConfig, ZoneConfig
+from .objek import ExcavatorKomposisi, FrameResult, Objek
 
-
-@dataclass
-class Truck:
-    """Satu truck terdeteksi, dalam koordinat piksel frame asli."""
-    x1: float
-    y1: float
-    x2: float
-    y2: float
-    conf: float
-    # True kalau kotak ini bukan hasil deteksi frame ini, melainkan kotak
-    # yang ditahan dari frame sebelumnya karena confidence sempat anjlok.
-    ditahan: bool = False
-
-    @property
-    def w(self) -> float:
-        return self.x2 - self.x1
-
-    @property
-    def h(self) -> float:
-        return self.y2 - self.y1
-
-    @property
-    def cx(self) -> float:
-        return (self.x1 + self.x2) / 2
-
-    @property
-    def cy(self) -> float:
-        return (self.y1 + self.y2) / 2
-
-    @property
-    def area(self) -> float:
-        return self.w * self.h
-
-    def dump_zone(self, zc: ZoneConfig) -> tuple[float, float, float, float]:
-        """Zona tuang = pintu bak di bagian atas bbox truck."""
-        top = self.y1 + self.h * zc.dump_top_ratio
-        bottom = self.y1 + self.h * (zc.dump_top_ratio + zc.dump_height_ratio)
-        return (self.x1, top, self.x2, min(bottom, self.y2))
-
-
-@dataclass
-class FrameResult:
-    trucks: list[Truck] = field(default_factory=list)
-    dig_motion: float = 0.0
-    infer_ms: float = 0.0
-    frame_shape: tuple[int, int] = (0, 0)
-    ditahan: bool = False
+# jarak maksimum pusat bucket ke pusat badan agar dianggap satu mesin
+JARAK_BUCKET_BADAN = 0.75
+# bucket dianggap "di atas" bila pusatnya lebih tinggi dari badan
+SELISIH_TINGGI_BUCKET = 0.05
 
 
 class Detector:
-    """YOLO untuk truck, plus pengukuran gerak pada ROI zona gali."""
+    """Deteksi multi-kelas + aturan komposisional ekskavator."""
 
     def __init__(self, cfg: DetectorConfig, zones: ZoneConfig, root: Path):
         from ultralytics import YOLO
@@ -68,34 +25,35 @@ class Detector:
         model_path = Path(cfg.model)
         if not model_path.is_absolute():
             model_path = root / model_path
+        if not model_path.is_file():
+            raise FileNotFoundError(f"model tidak ditemukan: {model_path}")
         self._model = YOLO(str(model_path))
         self._names = self._model.names
 
         wanted = {c.lower() for c in cfg.classes}
-        self._class_ids = sorted(
-            i for i, n in self._names.items() if n.lower() in wanted
-        )
+        self._class_ids = {i for i, n in self._names.items() if n.lower() in wanted}
         if not self._class_ids:
             raise ValueError(
-                f"tidak ada kelas COCO untuk {sorted(wanted)}; "
-                f"kelas model: {sorted(self._names.values())}"
+                f"model {model_path.name} tidak punya kelas dari {sorted(wanted)}; "
+                f"kelas yang ada: {sorted(self._names.values())}"
             )
+        self._ids_urut = sorted(self._class_ids)
 
         self.cfg = cfg
         self.zones = zones
         self._prev_gray: np.ndarray | None = None
-        # kotak terakhir + waktunya, untuk menahanconfidence yang anjlok
-        self._hold: list[Truck] = []
+        self._hold: Objek | None = None
         self._hold_mulai: float | None = None
 
     @property
     def class_names(self) -> list[str]:
-        return [self._names[i] for i in self._class_ids]
+        return [self._names[i] for i in self._ids_urut]
 
+    # ------------------------------------------------------------------
     def detect(self, frame: np.ndarray) -> FrameResult:
-        started = time.perf_counter()
+        mulai = time.perf_counter()
         h, w = frame.shape[:2]
-        result = FrameResult(frame_shape=(h, w))
+        hasil = FrameResult(frame_shape=(h, w))
 
         res = self._model.predict(
             frame,
@@ -103,68 +61,131 @@ class Detector:
             iou=self.cfg.iou,
             imgsz=self.cfg.imgsz,
             device=self.cfg.device,
-            classes=self._class_ids,
+            classes=self._ids_urut,
             verbose=False,
         )[0]
 
-        kuat: list[Truck] = []
-        lemah: list[Truck] = []
+        kuat: list[Objek] = []
+        lemah: list[Objek] = []
         if res.boxes is not None and len(res.boxes):
             xyxy = res.boxes.xyxy.cpu().numpy()
-            confs = res.boxes.conf.cpu().numpy()
-            for box, cf in zip(xyxy, confs):
+            cls = res.boxes.cls.cpu().numpy()
+            conf = res.boxes.conf.cpu().numpy()
+            for box, c, cf in zip(xyxy, cls, conf):
                 x1, y1, x2, y2 = [float(v) for v in box]
                 if x2 <= x1 or y2 <= y1:
                     continue
-                lebar = (x2 - x1) / w
-                if not (self.cfg.min_width_ratio <= lebar <= self.cfg.max_width_ratio):
-                    continue
-                t = Truck(x1, y1, x2, y2, float(cf))
-                (kuat if float(cf) >= self.cfg.confidence else lemah).append(t)
+                o = Objek(self._names[int(c)], x1, y1, x2, y2, float(cf))
+                if o.kelas == "truck":
+                    lebar = o.w / w
+                    if not (self.cfg.min_width_ratio <= lebar <= self.cfg.max_width_ratio):
+                        continue
+                (kuat if o.conf >= self.cfg.confidence else lemah).append(o)
 
-        # truck terbesar dianggap target utama
-        if kuat:
-            kuat.sort(key=lambda t: -t.area)
-            result.trucks = kuat[:1]
-            self._hold = list(result.trucks)
+        # objek kecil seperti platnomor boleh confidence lebih rendah,
+        # karena ukurannya kecil dan model cenderung tidak yakin
+        for o in lemah:
+            if o.kelas in self.cfg.low_conf_classes and o.conf >= self.cfg.low_conf_floor:
+                kuat.append(o)
+
+        # penahanan hanya untuk truck: dia target zona tuang dan ukurannya
+        # besar, jadi stabil. Bucket kecil tidak ditahan karena posisinya
+        # berubah cepat.
+        truck_kuat = [o for o in kuat if o.kelas == "truck"]
+        truck_lemah = [o for o in lemah if o.kelas == "truck"]
+        lainnya = [o for o in kuat if o.kelas != "truck"]
+
+        if truck_kuat:
+            truck_kuat.sort(key=lambda o: -o.area)
+            hasil.objek = lainnya + truck_kuat[:1]
+            self._hold = truck_kuat[0]
             self._hold_mulai = time.monotonic()
-        elif lemah and self._hold:
-            # Deteksi lemah tapi posisinya masih valid di frame ini. Lebih baik
-            # dipakai daripada menyimpan kotak basi dari frame lalu.
-            lemah.sort(key=lambda t: -t.area)
-            t = lemah[0]
-            result.trucks = [Truck(t.x1, t.y1, t.x2, t.y2, t.conf, ditahan=True)]
-            result.ditahan = True
-            self._hold = list(result.trucks)
+        elif truck_lemah and self._hold is not None:
+            truck_lemah.sort(key=lambda o: -o.area)
+            t = truck_lemah[0]
+            ditahan = Objek("truck", t.x1, t.y1, t.x2, t.y2, t.conf, ditahan=True)
+            hasil.objek = lainnya + [ditahan]
+            hasil.ditahan = True
+            self._hold = ditahan
             self._hold_mulai = time.monotonic()
-        elif self._hold and self._hold_mulai is not None:
-            # Tidak ada deteksi sama sekali, tapi objeknya masih di frame.
-            # Kotak ditahan sebentar supaya truck tidak berkedip hilang.
+        elif self._hold is not None and self._hold_mulai is not None:
             umur = time.monotonic() - self._hold_mulai
             if umur <= self.cfg.hold_seconds:
-                redup = max(0.0, self._hold[0].conf * (1.0 - umur / self.cfg.hold_seconds))
-                result.trucks = [Truck(
-                    self._hold[0].x1, self._hold[0].y1,
-                    self._hold[0].x2, self._hold[0].y2,
-                    redup, ditahan=True,
-                )]
-                result.ditahan = True
+                redup = max(0.0, self._hold.conf * (1.0 - umur / self.cfg.hold_seconds))
+                ditahan = Objek("truck", self._hold.x1, self._hold.y1,
+                                self._hold.x2, self._hold.y2, redup, ditahan=True)
+                hasil.objek = lainnya + [ditahan]
+                hasil.ditahan = True
             else:
-                self._hold = []
+                self._hold = None
                 self._hold_mulai = None
 
-        result.trucks.sort(key=lambda t: -t.area)
+        hasil.ekskavator = self._gabung_ekskavator(hasil.buckets, hasil.badan, w, h)
+        hasil.dig_motion = self._gerak_di_zona_gali(frame)
+        hasil.infer_ms = (time.perf_counter() - mulai) * 1000.0
+        return hasil
 
-        result.dig_motion = self._gerak_di_zona_gali(frame)
-        result.infer_ms = (time.perf_counter() - started) * 1000.0
-        return result
+    # ------------------------------------------------------------------
+    def _gabung_ekskavator(self, buckets: list[Objek], badan: list[Objek],
+                            w: int, h: int) -> list[ExcavatorKomposisi]:
+        """Ekskavator = bucket + lengan penyambung + badan kendaraan.
 
-    def _gerak_di_zona_gali(self, frame: np.ndarray) -> float:
-        """Fraksi piksel di zona gali yang berubah sejak frame sebelumnya.
-
-       inhos dipakai sebagai proksi aktivitas mengguk. Pada kamera di kabin
-        seluruh bidang bergerak, jadi ambangnya dibuat longgar.
+        Model dilatih dengan label 'excavator' untuk badan saja. Kalau model
+        gagal menemukan badan tapi bucket terlihat jelas, bucket + area
+        tubuh mesin di bawahnya tetap dihitung sebagai ekskavator - dengan
+        confidence lebih rendah karena tidak ada konfirmasi badan.
         """
+        if not buckets:
+            return []
+
+        # badan hasil deteksi langsung
+        kandidat_badan: list[Objek | None] = list(badan)
+
+        hasil: list[ExcavatorKomposisi] = []
+        dipakai: set[int] = set()
+
+        for b in sorted(buckets, key=lambda o: -o.conf):
+            pairing = None
+            for i, s in enumerate(kandidat_badan):
+                if s is None or i in dipakai:
+                    continue
+                jarak = ((b.cx - s.cx) / w) ** 2 + ((b.cy - s.cy) / h) ** 2
+                if jarak ** 0.5 <= JARAK_BUCKET_BADAN:
+                    pairing = (i, s, jarak ** 0.5)
+                    break
+
+            if pairing is not None:
+                i, s, jarak = pairing
+                dipakai.add(i)
+                conf = round((b.conf * 0.55 + s.conf * 0.45) * (1.0 - jarak * 0.3), 4)
+                hasil.append(ExcavatorKomposisi(
+                    bucket=b, badan=s,
+                    lengan=((s.cx, s.cy), (b.cx, b.cy)),
+                    conf=conf,
+                    komponen={"bucket": True, "lengan": True, "badan": True},
+                ))
+            else:
+                # hanya bucket: ekskavator belum bisa dipastikan
+                hasil.append(ExcavatorKomposisi(
+                    bucket=b, badan=b,
+                    lengan=((b.cx, b.cy), (b.cx, b.cy)),
+                    conf=round(b.conf * 0.5, 4),
+                    komponen={"bucket": True, "lengan": False, "badan": False},
+                ))
+        return hasil
+
+    @staticmethod
+    def _bertumpuk(a: Objek, b: Objek) -> bool:
+        """Berapa besar kotak a berada di dalam kotak b (0-1)."""
+        x1 = max(a.x1, b.x1); y1 = max(a.y1, b.y1)
+        x2 = min(a.x2, b.x2); y2 = min(a.y2, b.y2)
+        if x2 <= x1 or y2 <= y1:
+            return 0.0
+        return ((x2 - x1) * (y2 - y1)) / max(1.0, a.area)
+
+    # ------------------------------------------------------------------
+    def _gerak_di_zona_gali(self, frame: np.ndarray) -> float:
+        """Fraksi piksel di zona gali yang berubah sejak frame sebelumnya."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
         h, w = gray.shape[:2]
@@ -176,13 +197,11 @@ class Detector:
             return 0.0
 
         roi = gray[py1:py2, px1:px2]
-
         if self._prev_gray is None:
             self._prev_gray = gray
             return 0.0
 
-        prev_roi = self._prev_gray[py1:py2, px1:px2]
-        diff = cv2.absdiff(roi, prev_roi)
+        diff = cv2.absdiff(roi, self._prev_gray[py1:py2, px1:px2])
         _, mask = cv2.threshold(diff, 18, 255, cv2.THRESH_BINARY)
         gerak = float(np.count_nonzero(mask)) / float(mask.size)
         self._prev_gray = gray
@@ -190,5 +209,5 @@ class Detector:
 
     def reset(self) -> None:
         self._prev_gray = None
-        self._hold = []
+        self._hold = None
         self._hold_mulai = None

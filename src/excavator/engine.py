@@ -14,7 +14,7 @@ import numpy as np
 
 from .activity import FASE_LABEL, ActivityMachine, Fase
 from .config import Config
-from .detector import Detector, Truck
+from .detector import Detector
 
 # warna fase untuk overlay
 WARNA_FASE = {
@@ -66,6 +66,7 @@ class Engine:
         self.error: str | None = None
         self.frame_terakhir: datetime | None = None
         self.truck_ditahan: bool = False
+        self.hasil = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -122,10 +123,8 @@ class Engine:
 
     def _process(self, frame: np.ndarray) -> None:
         hasil = self.detector.detect(frame)
-        status = self.machine.update(hasil.trucks, hasil.dig_motion,
-                                    hasil.frame_shape)
-        annot = self._anotasi(frame, hasil.trucks, status.fase.value,
-                              hasil.dig_motion)
+        status = self.machine.update(hasil, self.cfg)
+        annot = self._anotasi(frame, hasil, status.fase.value, hasil.dig_motion)
         ok, buf = cv2.imencode(".jpg", annot,
                                [int(cv2.IMWRITE_JPEG_QUALITY),
                                 self.cfg.server.stream_quality])
@@ -135,17 +134,19 @@ class Engine:
             self.rid += 1
             self.frame_terakhir = datetime.now()
             self.truck_ditahan = hasil.ditahan
+            self.hasil = hasil
             self.frames.append(FrameInfo(buf.tobytes(), self.frame_terakhir,
-                                         hasil.trucks))
+                                         hasil.objek))
 
     # ---------- overlay ----------
 
-    def _anotasi(self, frame: np.ndarray, trucks: list[Truck],
-                 fase: str, motion: float) -> np.ndarray:
+    def _anotasi(self, frame: np.ndarray, hasil, fase: str,
+                 motion: float) -> np.ndarray:
         vis = frame.copy()
         h, w = vis.shape[:2]
         warna = WARNA_FASE.get(fase, (255, 255, 255))
         skala = w / 640.0
+        trucks = hasil.trucks
 
         # zona gali (tetap)
         x1, y1, x2, y2 = self.cfg.zones.dig
@@ -154,6 +155,35 @@ class Engine:
         cv2.putText(vis, "ZONA GALI", (int(x1 * w) + 6, int(y1 * h) + 22),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55 * skala,
                     (59, 130, 246), 2)
+
+        # ekskavator: bucket + lengan penyambung + badan kendaraan
+        for e in hasil.ekskavator:
+            if e.komponen.get("badan"):
+                cv2.line(vis, (int(e.lengan[0][0]), int(e.lengan[0][1])),
+                         (int(e.lengan[1][0]), int(e.lengan[1][1])),
+                         (168, 85, 247), 4)          # lengan/boom
+                cv2.circle(vis, (int(e.badan.cx), int(e.badan.cy)),
+                           6, (168, 85, 247), -1)
+            bx1, by1, bx2, by2 = [int(v) for v in e.bucket.bbox]
+            cv2.rectangle(vis, (bx1, by1), (bx2, by2), (168, 85, 247), 2)
+            cv2.putText(vis, f"excavator {e.conf:.2f}", (bx1, max(16, by1 - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55 * skala, (168, 85, 247), 2)
+
+        # bucket (dari kelas excavator juga sudah digambar di atas)
+        for b in hasil.buckets:
+            if any(e.bucket is b for e in hasil.ekskavator):
+                continue
+            cv2.rectangle(vis, (int(b.x1), int(b.y1)), (int(b.x2), int(b.y2)),
+                          (34, 197, 94), 2)
+            cv2.putText(vis, f"bucket {b.conf:.2f}", (int(b.x1), max(16, int(b.y1) - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5 * skala, (34, 197, 94), 2)
+
+        # plat nomor
+        for p in hasil.plates:
+            cv2.rectangle(vis, (int(p.x1), int(p.y1)), (int(p.x2), int(p.y2)),
+                          (14, 165, 233), 2)
+            cv2.putText(vis, f"plat {p.conf:.2f}", (int(p.x1), max(16, int(p.y1) - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45 * skala, (14, 165, 233), 2)
 
         # truck + zona tuang
         for i, t in enumerate(trucks):
@@ -183,12 +213,14 @@ class Engine:
 
         # panel status
         pad = int(10 * skala)
-        tinggi = int(92 * skala)
+        tinggi = int(112 * skala)
         cv2.rectangle(vis, (0, 0), (int(300 * skala), tinggi), (15, 23, 42), -1)
+        eks = hasil.ekskavator[0] if hasil.ekskavator else None
         baris = [
             (f"FASE: {FASE_LABEL[Fase(fase)].upper()}", warna),
             (f"truck conf: {trucks[0].conf:.2f}" if trucks else "truck: tidak terdeteksi", (245, 158, 11)),
-            (f"gerak zona gali: {motion:.4f}", (148, 163, 184)),
+            (f"bucket: {eks.bucket.conf:.2f}" if eks else "bucket: tidak terdeteksi", (34, 197, 94)),
+            (f"excavator: {eks.conf:.2f}" if eks else "excavator: tidak", (168, 85, 247)),
         ]
         for i, (teks, c) in enumerate(baris):
             cv2.putText(vis, teks, (pad, int((26 + i * 26) * skala)),

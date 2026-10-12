@@ -9,12 +9,12 @@
     <div class="alert alert-warning d-flex align-items-start gap-2 mb-3 py-2 small">
         <i class="bi bi-exclamation-triangle-fill mt-1"></i>
         <div>
-            <strong>Fase adalah inferensi, bukan pengamatan langsung.</strong>
-            Model COCO tidak punya kelas ekskavator maupun bucket, jadi hanya
-            dump truck yang dideteksi - lengan ekskavator kadang salah dibaca
-            sebagai kelas lain. Fase <em>Mengeruk</em> dibaca dari energi
-            gerak di zona gali, dan <em>Menuangkan</em> dari dump truck yang
-            diam. Angka confidence adalah confidence deteksi truck.
+            <strong>Deteksi memakai model yang dilatih sendiri</strong>
+            (bucket, excavator, truck). Fase <em>Mengeruk</em> dibaca dari
+            posisi bucket di zona gali, <em>Menuangkan</em> dari dump truck
+            yang diam. Angka confidence adalah confidence model untuk
+            tiap objek - bukan kepastian aktivitas. Plat nomor nyaris tidak
+            terlihat di video referensi, jadi kelasnya masih sangat lemah.
         </div>
     </div>
 
@@ -133,12 +133,12 @@
                 <thead class="table-light">
                     <tr>
                         <th>No.</th><th>Waktu Mulai</th><th>Waktu Selesai</th>
-                        <th>Durasi</th><th>Fase</th><th>Truck Conf.</th><th>Gerak Zona Gali</th>
+                        <th>Durasi</th><th>Fase</th><th>Bucket</th><th>Excavator</th><th>Truck</th><th>Gerak Zona Gali</th>
                     </tr>
                 </thead>
                 <tbody id="riwayatBody">
                     <tr>
-                        <td colspan="7" class="text-center text-secondary py-4">
+                        <td colspan="8" class="text-center text-secondary py-4">
                             Belum ada riwayat.
                         </td>
                     </tr>
@@ -203,50 +203,57 @@ function herraMuatStatus() {
 }
 
 function herraKartuFase(d) {
-    const pct = Math.round((d.truck_confidence || 0) * 100);
-    const adaTruck = pct > 0;
     const ditahan = !!(d.engine && d.engine.truck_ditahan);
+    const baris = (judul, sub, nilai, warna, kelas) => `
+        <div class="d-flex justify-content-between align-items-center border-top pt-2 mt-2">
+            <div>
+                <div class="fw-semibold">${judul}</div>
+                <div class="small text-secondary">${sub}</div>
+            </div>
+            <span class="badge ${kelas}">${nilai}</span>
+        </div>`;
 
-    const badge = !adaTruck
-        ? '<span class="badge text-bg-secondary">tidak ada</span>'
-        : (ditahan
-            ? '<span class="badge text-bg-warning" title="Kotak ditahan dari frame sebelumnya, bukan deteksi frame ini">'
-              + pct + '% ditahan</span>'
-            : '<span class="badge text-bg-warning">' + pct + '%</span>');
+    const confTruck = d.truck_confidence > 0
+        ? Math.round(d.truck_confidence * 100) + '%'
+        : 'tidak ada';
+    const confBucket = d.bucket_confidence > 0
+        ? Math.round(d.bucket_confidence * 100) + '%'
+        : 'tidak ada';
+    const confExc = d.excavator_confidence > 0
+        ? Math.round(d.excavator_confidence * 100) + '%'
+        : 'tidak ada';
+    const confPlate = d.plate_confidence > 0
+        ? Math.round(d.plate_confidence * 100) + '%'
+        : 'tidak ada';
 
-    let zona = '<div class="text-secondary small mt-2">Zona tuang: tidak aktif (tidak ada truck)</div>';
-    if (d.zona_tuang) {
-        zona = '<div class="text-secondary small mt-2">Zona tuang aktif di atas bak truck</div>';
-    }
+    const posisiBucket = d.bucket_posisi !== null && d.bucket_posisi !== undefined
+        ? `posisi vertikal ${Math.round(d.bucket_posisi * 100)}%` +
+          (d.bucket_di_zona_gali ? ' - di zona gali' : ' - di luar zona gali')
+        : 'belum ada bucket';
 
     const catatan = ditahan
         ? '<div class="alert alert-secondary py-1 px-2 mt-2 mb-0 small">'
-          + 'Kotak ini <strong>ditahan</strong> dari frame sebelumnya - confidence '
-          + 'sempat anjlok. Bukan deteksi baru.</div>'
+          + 'Kotak truck <strong>ditahan</strong> dari frame sebelumnya - bukan '
+          + 'deteksi baru.</div>'
         : '';
 
     return `
         <div class="text-center py-2">
-            <div class="display-6 fw-bold" id="faseNama">${d.fase_label}</div>
-            <div class="text-secondary small mb-3">
+            <div class="display-6 fw-bold">${d.fase_label}</div>
+            <div class="text-secondary small mb-2">
                 berlangsung ${herraDurasi(d.durasi_fase_detik)}
             </div>
+            <div class="small text-secondary">sumber sinyal: ${d.sumber_sinyal}</div>
         </div>
-        <div class="d-flex justify-content-between align-items-center border-top pt-2">
-            <div>
-                <div class="fw-semibold"><i class="bi bi-truck"></i> Dump Truck</div>
-                <div class="small text-secondary">sumber sinyal: ${d.sumber_sinyal}</div>
-            </div>
-            ${badge}
-        </div>
-        <div class="d-flex justify-content-between align-items-center border-top pt-2 mt-2">
-            <div>
-                <div class="fw-semibold"><i class="bi bi-activity"></i> Energi Gerek Zona Gali</div>
-                <div class="small text-secondary">proxy aktivitas mengguk</div>
-            </div>
-            <span class="badge text-bg-info">${d.zona_gali_motion}</span>
-        </div>
-        ${catatan}${zona}`;
+        ${baris('<i class="bi bi-truck"></i> Dump Truck', 'target zona tuang',
+                confTruck, '', 'text-bg-warning')}
+        ${baris('<i class="bi bi-box"></i> Bucket', posisiBucket,
+                confBucket, '', 'text-bg-success')}
+        ${baris('<i class="bi bi-truck-front"></i> Excavator',
+                'bucket + lengan + badan', confExc, '', 'text-bg-primary')}
+        ${baris('<i class="bi bi-upc-scan"></i> Plat Nomor',
+                'nomor kendaraan', confPlate, '', 'text-bg-info')}
+        ${catatan}`;
 }
 
 function herraTandaiTrace(faseAktif) {
@@ -266,7 +273,7 @@ function herraMuatRiwayat() {
         .then(d => {
             const tbody = document.getElementById('riwayatBody');
             if (!d.events.length) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-secondary py-4">'
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center text-secondary py-4">'
                     + 'Belum ada riwayat.</td></tr>';
                 return;
             }
@@ -277,7 +284,9 @@ function herraMuatRiwayat() {
                     <td>${herraWaktu(e.selesai)}</td>
                     <td class="fw-semibold">${herraDurasi(e.durasi)}</td>
                     <td><span class="status-pill text-bg-light border">${e.fase_label}</span></td>
-                    <td>${Math.round(e.truck_confidence * 100)}%</td>
+                    <td>${Math.round((e.bucket_confidence || 0) * 100)}%</td>
+                    <td>${Math.round((e.excavator_confidence || 0) * 100)}%</td>
+                    <td>${Math.round((e.truck_confidence || 0) * 100)}%</td>
                     <td class="text-secondary">${e.zona_gali_motion}</td>
                 </tr>`).join('');
         })

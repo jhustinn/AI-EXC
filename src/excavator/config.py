@@ -39,6 +39,10 @@ class DetectorConfig:
     hold_mark_seconds: float = 0.8
     # kelas COCO yang dianggap sebagai dump truck
     classes: list[str] = field(default_factory=lambda: ["truck"])
+    # Objek kecil seperti plat nomor cenderung confidence-nya rendah di model
+    # sendiri, jadi diberi lantai confidence yang lebih longgar.
+    low_conf_classes: list[str] = field(default_factory=lambda: ["plate"])
+    low_conf_floor: float = 0.18
     min_width_ratio: float = 0.15       # abaikan truck kecil di kejauhan
     max_width_ratio: float = 1.0
 
@@ -60,6 +64,9 @@ class ActivityConfig:
     phase_min_seconds: float = 2.0      # kandidat fase harus bertahan ini dulu
     dump_min_seconds: float = 2.5       # truck diam minimal ini -> dianggap menuang
     dig_min_seconds: float = 3.0        # gerak di zona gali minimal ini -> mengguk
+    # Bucket dianggap sedang mengguk bila pusatnya ada di zona gali DAN
+    # berada di bagian bawah frame (bucket turun ke timbun material).
+    bucket_low_ratio: float = 0.55
     idle_seconds: float = 5.0           # tanpa aktivitas selama ini -> idle
 
 

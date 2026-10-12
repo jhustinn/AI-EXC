@@ -124,15 +124,18 @@ for vno, path in enumerate(sorted(SRC.glob("*.mp4")), start=1):
     print(f"  {path.name}: {saved} frame diambil")
 
 (OUT / "data.yaml").write_text(
-    "# Dataset deteksi bucket alat berat\n"
+    "# Dataset alat berat: bucket, dump truck, ekskavator\n"
+    "# Kelas 1 (truck) diisi otomatis YOLO COCO.\n"
+    "# Kelas 0 (bucket) dan 2 (excavator) diisi manual.\n"
     "path: E:/App/AI-CCTV/datasets/excavator\n"
     "train: images/train\n"
     "val: images/val\n"
     "\n"
-    "nc: 2\n"
+    "nc: 3\n"
     "names:\n"
     "  0: bucket\n"
-    "  1: truck\n",
+    "  1: truck\n"
+    "  2: excavator\n",
     encoding="utf-8",
 )
 
