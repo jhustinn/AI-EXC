@@ -65,6 +65,7 @@ class Engine:
         self.rid = 0
         self.error: str | None = None
         self.frame_terakhir: datetime | None = None
+        self.truck_ditahan: bool = False
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -133,6 +134,7 @@ class Engine:
         with self._lock:
             self.rid += 1
             self.frame_terakhir = datetime.now()
+            self.truck_ditahan = hasil.ditahan
             self.frames.append(FrameInfo(buf.tobytes(), self.frame_terakhir,
                                          hasil.trucks))
 
@@ -155,11 +157,24 @@ class Engine:
 
         # truck + zona tuang
         for i, t in enumerate(trucks):
-            cv2.rectangle(vis, (int(t.x1), int(t.y1)), (int(t.x2), int(t.y2)),
-                          (245, 158, 11), 2)
+            if t.ditahan:
+                # kotak ditahan dari frame sebelumnya, bukan hasil deteksi
+                # frame ini - ditulis berbeda supaya tidak dikira bukti
+                cv2.rectangle(vis, (int(t.x1), int(t.y1)), (int(t.x2), int(t.y2)),
+                              (245, 158, 11), 2)
+                tengah = (int((t.x1 + t.x2) / 2), int((t.y1 + t.y2) / 2))
+                cv2.line(vis, (tengah[0] - 8, tengah[1]), (tengah[0] + 8, tengah[1]),
+                         (245, 158, 11), 2)
+                cv2.line(vis, (tengah[0], tengah[1] - 8), (tengah[0], tengah[1] + 8),
+                         (245, 158, 11), 2)
+                label = "truck (ditahan)"
+            else:
+                cv2.rectangle(vis, (int(t.x1), int(t.y1)), (int(t.x2), int(t.y2)),
+                              (245, 158, 11), 2)
+                label = f"truck {t.conf:.2f}"
             dx1, dy1, dx2, dy2 = [int(v) for v in t.dump_zone(self.cfg.zones)]
             cv2.rectangle(vis, (dx1, dy1), (dx2, dy2), (34, 197, 94), 2)
-            cv2.putText(vis, f"truck {t.conf:.2f}", (int(t.x1), max(16, int(t.y1) - 8)),
+            cv2.putText(vis, label, (int(t.x1), max(16, int(t.y1) - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5 * skala, (245, 158, 11), 2)
             if i == 0:
                 cv2.putText(vis, "ZONA TUANG", (dx1, max(16, dy1 - 8)),

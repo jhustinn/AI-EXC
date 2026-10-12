@@ -19,6 +19,9 @@ class Truck:
     x2: float
     y2: float
     conf: float
+    # True kalau kotak ini bukan hasil deteksi frame ini, melainkan kotak
+    # yang ditahan dari frame sebelumnya karena confidence sempat anjlok.
+    ditahan: bool = False
 
     @property
     def w(self) -> float:
@@ -53,6 +56,7 @@ class FrameResult:
     dig_motion: float = 0.0
     infer_ms: float = 0.0
     frame_shape: tuple[int, int] = (0, 0)
+    ditahan: bool = False
 
 
 class Detector:
@@ -80,6 +84,9 @@ class Detector:
         self.cfg = cfg
         self.zones = zones
         self._prev_gray: np.ndarray | None = None
+        # kotak terakhir + waktunya, untuk menahanconfidence yang anjlok
+        self._hold: list[Truck] = []
+        self._hold_mulai: float | None = None
 
     @property
     def class_names(self) -> list[str]:
@@ -92,7 +99,7 @@ class Detector:
 
         res = self._model.predict(
             frame,
-            conf=self.cfg.confidence,
+            conf=self.cfg.release_confidence,
             iou=self.cfg.iou,
             imgsz=self.cfg.imgsz,
             device=self.cfg.device,
@@ -100,6 +107,8 @@ class Detector:
             verbose=False,
         )[0]
 
+        kuat: list[Truck] = []
+        lemah: list[Truck] = []
         if res.boxes is not None and len(res.boxes):
             xyxy = res.boxes.xyxy.cpu().numpy()
             confs = res.boxes.conf.cpu().numpy()
@@ -110,9 +119,40 @@ class Detector:
                 lebar = (x2 - x1) / w
                 if not (self.cfg.min_width_ratio <= lebar <= self.cfg.max_width_ratio):
                     continue
-                result.trucks.append(Truck(x1, y1, x2, y2, float(cf)))
+                t = Truck(x1, y1, x2, y2, float(cf))
+                (kuat if float(cf) >= self.cfg.confidence else lemah).append(t)
 
         # truck terbesar dianggap target utama
+        if kuat:
+            kuat.sort(key=lambda t: -t.area)
+            result.trucks = kuat[:1]
+            self._hold = list(result.trucks)
+            self._hold_mulai = time.monotonic()
+        elif lemah and self._hold:
+            # Deteksi lemah tapi posisinya masih valid di frame ini. Lebih baik
+            # dipakai daripada menyimpan kotak basi dari frame lalu.
+            lemah.sort(key=lambda t: -t.area)
+            t = lemah[0]
+            result.trucks = [Truck(t.x1, t.y1, t.x2, t.y2, t.conf, ditahan=True)]
+            result.ditahan = True
+            self._hold = list(result.trucks)
+            self._hold_mulai = time.monotonic()
+        elif self._hold and self._hold_mulai is not None:
+            # Tidak ada deteksi sama sekali, tapi objeknya masih di frame.
+            # Kotak ditahan sebentar supaya truck tidak berkedip hilang.
+            umur = time.monotonic() - self._hold_mulai
+            if umur <= self.cfg.hold_seconds:
+                redup = max(0.0, self._hold[0].conf * (1.0 - umur / self.cfg.hold_seconds))
+                result.trucks = [Truck(
+                    self._hold[0].x1, self._hold[0].y1,
+                    self._hold[0].x2, self._hold[0].y2,
+                    redup, ditahan=True,
+                )]
+                result.ditahan = True
+            else:
+                self._hold = []
+                self._hold_mulai = None
+
         result.trucks.sort(key=lambda t: -t.area)
 
         result.dig_motion = self._gerak_di_zona_gali(frame)
@@ -150,3 +190,5 @@ class Detector:
 
     def reset(self) -> None:
         self._prev_gray = None
+        self._hold = []
+        self._hold_mulai = None

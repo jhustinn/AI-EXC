@@ -35,6 +35,10 @@ def status() -> dict:
         "kelas": engine.detector.class_names,
         "unit": engine.cfg.unit,
         "sumber": engine.cfg.source.kind,
+        # True berarti kotak truck bukan hasil deteksi frame ini, tapi kotak
+        # yang ditahan karena confidence sempat anjlok. Harus disebut terbuka
+        # supaya tidak dianggap bukti deteksi baru.
+        "truck_ditahan": engine.truck_ditahan,
     }
     snap["catatan"] = (
         "Fase disimpulkan dari deteksi dump truck (COCO) dan energi gerak "

@@ -26,9 +26,17 @@ class SourceConfig:
 class DetectorConfig:
     model: str = "yolov8n.pt"
     confidence: float = 0.35
+    # Ambang pelepasan. Ambul confidence turun masih diterima selama kotak
+    # ditahan, supaya truck tidak berkedip hilang-hilang di frame bersebelahan.
+    release_confidence: float = 0.20
     iou: float = 0.5
     device: str = "0"
     imgsz: int = 640
+    # Lama kotak ditahan setelah deteksi hilang. Confidence truck di video
+    # berayun 0,15-0,94 antar frame, jadi tanpa ini dashboard berkedip.
+    hold_seconds: float = 1.5
+    # Kalau kotak ditahan lebih dari ini, tandai sebagai ekstrapolasi.
+    hold_mark_seconds: float = 0.8
     # kelas COCO yang dianggap sebagai dump truck
     classes: list[str] = field(default_factory=lambda: ["truck"])
     min_width_ratio: float = 0.15       # abaikan truck kecil di kejauhan

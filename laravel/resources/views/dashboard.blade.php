@@ -10,11 +10,11 @@
         <i class="bi bi-exclamation-triangle-fill mt-1"></i>
         <div>
             <strong>Fase adalah inferensi, bukan pengamatan langsung.</strong>
-            Ukuran bucket belum dideteksi. Fase <em>Mengeruk</em> dibaca dari
-            energi gerak di zona gali, dan <em>Menuangkan</em> dari dump truck
-            yang diam - itu korelasi, bukan bukti bucket meng emptying.
-            Siklus dihitung saat satu fase Menuangkan selesai. Angka confidence
-            adalah confidence deteksi truck.
+            Model COCO tidak punya kelas ekskavator maupun bucket, jadi hanya
+            dump truck yang dideteksi - lengan ekskavator kadang salah dibaca
+            sebagai kelas lain. Fase <em>Mengeruk</em> dibaca dari energi
+            gerak di zona gali, dan <em>Menuangkan</em> dari dump truck yang
+            diam. Angka confidence adalah confidence deteksi truck.
         </div>
     </div>
 
@@ -205,14 +205,25 @@ function herraMuatStatus() {
 function herraKartuFase(d) {
     const pct = Math.round((d.truck_confidence || 0) * 100);
     const adaTruck = pct > 0;
-    const badge = adaTruck
-        ? '<span class="badge text-bg-warning">' + pct + '%</span>'
-        : '<span class="badge text-bg-secondary">tidak ada</span>';
+    const ditahan = !!(d.engine && d.engine.truck_ditahan);
+
+    const badge = !adaTruck
+        ? '<span class="badge text-bg-secondary">tidak ada</span>'
+        : (ditahan
+            ? '<span class="badge text-bg-warning" title="Kotak ditahan dari frame sebelumnya, bukan deteksi frame ini">'
+              + pct + '% ditahan</span>'
+            : '<span class="badge text-bg-warning">' + pct + '%</span>');
 
     let zona = '<div class="text-secondary small mt-2">Zona tuang: tidak aktif (tidak ada truck)</div>';
     if (d.zona_tuang) {
         zona = '<div class="text-secondary small mt-2">Zona tuang aktif di atas bak truck</div>';
     }
+
+    const catatan = ditahan
+        ? '<div class="alert alert-secondary py-1 px-2 mt-2 mb-0 small">'
+          + 'Kotak ini <strong>ditahan</strong> dari frame sebelumnya - confidence '
+          + 'sempat anjlok. Bukan deteksi baru.</div>'
+        : '';
 
     return `
         <div class="text-center py-2">
@@ -235,7 +246,7 @@ function herraKartuFase(d) {
             </div>
             <span class="badge text-bg-info">${d.zona_gali_motion}</span>
         </div>
-        ${zona}`;
+        ${catatan}${zona}`;
 }
 
 function herraTandaiTrace(faseAktif) {

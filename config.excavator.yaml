@@ -13,12 +13,18 @@ source:
 
 detector:
   model: yolov8n.pt
-  confidence: 0.35
+  confidence: 0.35          # ambang deteksi dipakai
+  release_confidence: 0.20  # deteksi sekecil ini masih dipakai untuk posisi
   iou: 0.5
   device: "0"
   imgsz: 640
   classes: ["truck"]        # kelas COCO untuk dump truck
   min_width_ratio: 0.15     # abaikan truck kecil di kejauhan
+  # Confidence truck di video ini berayun 0,15-0,94 antar frame bersebelahan.
+  # Tanpa penahanan, dashboard berkedip "tidak terdeteksi" 10% frame walau
+  # truck jelas ada. Kotak ditahan maksimal ini detik.
+  hold_seconds: 1.5
+  hold_mark_seconds: 0.8
 
 zones:
   # zona gali tetap, normalized [x1, y1, x2, y2]
