@@ -7,7 +7,7 @@ unit: EXC-07
 source:
   # kind: video (uji, pakai file lokal) atau rtsp (kamera produksi)
   kind: video
-  path: "INGIN SEPERTI INI/WhatsApp Video 2026-10-10 at 10.43.04 AM4.mp4"
+  path: "INGIN SEPERTI INI/WhatsApp Video 2026-10-10 at 10.43.03 AM2.mp4"
   loop: true
   fps: 10
 
@@ -26,12 +26,16 @@ zones:
   # zona tuang mengikuti bbox truck -> pintu bak di bagian atas
   dump_top_ratio: 0.12
   dump_height_ratio: 0.60
-  motion_threshold: 0.012   # energi gerak di zona gali yang dianggap mengguk
+  # Energi gerak di zona gali yang dianggap "mengguk". Ambang ini diambil dari
+  # median hasil pengukuran (scripts/ukur_gerak.py): rentang motion 0,00-0,69,
+  # median 0,09-0,13. Ambang di tengah-tengah supaya sinyal benar-benar
+  # terbagi, bukan asal angka.
+  motion_threshold: 0.09
 
 activity:
+  phase_min_seconds: 2.0    # kandidat fase harus bertahan ini dulu (debounce)
   dump_min_seconds: 2.5     # truck diam sebegitu -> fase Menuangkan
   dig_min_seconds: 3.0      # gerak di zona gali sebegitu -> fase Mengeruk
-  truck_gone_seconds: 4.0   # truck hilang sebegitu -> siklus selesai
   idle_seconds: 5.0
 
 store:

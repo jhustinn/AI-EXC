@@ -78,7 +78,7 @@ class Status:
 
     @property
     def durasi_fase(self) -> float:
-        return (datetime.now(timezone.utc) - self.since).total_seconds()
+        return (datetime.now(timezone.utc) - self.sejak).total_seconds()
 
 
 class ActivityMachine:
@@ -94,8 +94,9 @@ class ActivityMachine:
 
         self._mulai_diam: datetime | None = None
         self._posisi_akhir: tuple[float, float] | None = None
-        self._tidak_tampak: datetime | None = None
         self._terakhir_aktivitas: datetime = datetime.now(timezone.utc)
+        self._kandidat: Fase | None = None
+        self._kandidat_mulai: datetime = datetime.now(timezone.utc)
         self._siklus_ke = 0
 
     # ---------- internal ----------
@@ -111,6 +112,22 @@ class ActivityMachine:
         lebar = max(1.0, truck.w)
         return (dx / lebar) < 0.06 and (dy / lebar) < 0.06
 
+    def _stabil(self, kandidat: Fase, sekarang: datetime) -> Fase:
+        """Debounce: kandidat fase harus bertahan awhile sebelum diterima.
+
+        Tanpa ini fase bergetar tiap frame dan jumlah siklus jadi tidak
+        masuk akal karena sinyal gerak zona gali bising.
+        """
+        if kandidat == self.status.fase:
+            self._kandidat = None
+            return self.status.fase
+        if kandidat != self._kandidat:
+            self._kandidat = kandidat
+            self._kandidat_mulai = sekarang
+            return self.status.fase
+        cukup = (sekarang - self._kandidat_mulai).total_seconds() >= self.cfg.phase_min_seconds
+        return kandidat if cukup else self.status.fase
+
     def _ganti_fase(self, fase: Fase, sekarang: datetime,
                     conf: float, motion: float) -> None:
         if fase == self.status.fase:
@@ -121,12 +138,19 @@ class ActivityMachine:
             self.aktif.motion = motion
             self._akumulasikan(self.aktif)
             self.riwayat.append(self.aktif)
+            # Satu siklus = satu fase Menuangkan yang selesai dan bertahan
+            # cukup lama. Truck TIDAK perlu hilang di antaranya, karena truck
+            # di lapangan tetap diparkir selama satu siklus dimuat.
+            if (self.aktif.fase is Fase.MENUANGKAN
+                    and self.aktif.durasi >= self.cfg.dump_min_seconds):
+                self.statistik.jumlah_siklus += 1
+                self.statistik.siklus_terakhir = self.aktif.mulai
         self._siklus_ke += 1
         self.aktif = EventAktivitas(
             mulai=sekarang, fase=fase, siklus=self._siklus_ke
         )
         self.status.fase = fase
-        self.status.since = sekarang
+        self.status.sejak = sekarang
 
     def _akumulasikan(self, ev: EventAktivitas) -> None:
         durasi = ev.durasi
@@ -147,7 +171,6 @@ class ActivityMachine:
 
         if truck:
             diam = self._truck_diam(truck)
-            self._tidak_tampak = None
             if diam:
                 if self._mulai_diam is None:
                     self._mulai_diam = sekarang
@@ -156,43 +179,35 @@ class ActivityMachine:
         else:
             self._mulai_diam = None
             self._posisi_akhir = None
-            if self._tidak_tampak is None:
-                self._tidak_tampak = sekarang
 
         diam_cukup = (
             truck is not None
             and self._mulai_diam is not None
             and (sekarang - self._mulai_diam).total_seconds() >= self.cfg.dump_min_seconds
         )
+        gali_aktif = motion >= self.zones.motion_threshold
 
         # -------- tentukan kandidat fase --------
-        if diam_cukup:
-            kandidat = Fase.MENUANGKAN
-        elif truck and self.status.fase is Fase.MENUANGKAN:
-            kandidat = Fase.KEMBALI
-        elif truck:
-            kandidat = Fase.MENGANGKAT
-        elif motion >= self.zones.motion_threshold:
+        # Urutan penting. Excavator tetap bisa mengguk walau truck sudah
+        # terparkir di tempat, jadi gerak di zona gali didahulukan. Menuangkan
+        # baru/bootstrap kalau zona gali justru tenang.
+        if gali_aktif:
             kandidat = Fase.MENGKERUK
+        elif diam_cukup:
+            kandidat = Fase.MENUANGKAN
+        elif truck:
+            kandidat = (Fase.KEMBALI if self.status.fase is Fase.MENUANGKAN
+                        else Fase.MENGANGKAT)
         else:
             kandidat = Fase.MEMUTAR
 
-        ada_aktivitas = bool(truck) or motion >= self.zones.motion_threshold
+        ada_aktivitas = bool(truck) or gali_aktif
         if ada_aktivitas:
             self._terakhir_aktivitas = sekarang
         elif (sekarang - self._terakhir_aktivitas).total_seconds() >= self.cfg.idle_seconds:
             kandidat = Fase.IDLE
 
-        self._ganti_fase(kandidat, sekarang, conf, motion)
-
-        # -------- akhir siklus saat truck pergi cukup lama --------
-        if self._tidak_tampak is not None and \
-                (sekarang - self._tidak_tampak).total_seconds() >= self.cfg.truck_gone_seconds:
-            if self.aktif and self.aktif.fase is Fase.MENUANGKAN:
-                self.statistik.jumlah_siklus += 1
-                self.statistik.siklus_terakhir = self.aktif.mulai
-                self.statistik.durasi_menuangkan = 0.0
-            self._tidak_tampak = None
+        self._ganti_fase(self._stabil(kandidat, sekarang), sekarang, conf, motion)
 
         # -------- publish status --------
         self.status.truck_conf = conf
@@ -222,6 +237,20 @@ class ActivityMachine:
 
     def snapshot(self) -> dict:
         s = self.status
+        # Fase yang sedang berjalan ikut dihitung, kalau tidak dashboard
+        # akan menampilkan 0 sementara statusnya sudah "Menuangkan 29 detik".
+        berjalan_mengeruk = 0.0
+        berjalan_menuang = 0.0
+        berjalan_idle = 0.0
+        if self.aktif:
+            d = self.aktif.durasi
+            if self.aktif.fase is Fase.MENGKERUK:
+                berjalan_mengeruk = d
+            elif self.aktif.fase is Fase.MENUANGKAN:
+                berjalan_menuang = d
+            elif self.aktif.fase is Fase.IDLE:
+                berjalan_idle = d
+
         return {
             "fase": s.fase.value,
             "fase_label": FASE_LABEL[s.fase],
@@ -232,9 +261,9 @@ class ActivityMachine:
             "zona_tuang": list(s.zona_tuang) if s.zona_tuang else None,
             "zona_gali": list(s.zona_gali) if s.zona_gali else None,
             "kpi": {
-                "durasi_mengeruk": round(self.statistik.durasi_mengeruk, 1),
-                "durasi_menuangkan": round(self.statistik.durasi_menuangkan, 1),
+                "durasi_mengeruk": round(self.statistik.durasi_mengeruk + berjalan_mengeruk, 1),
+                "durasi_menuangkan": round(self.statistik.durasi_menuangkan + berjalan_menuang, 1),
                 "jumlah_siklus": self.statistik.jumlah_siklus,
-                "waktu_idle": round(self.statistik.waktu_idle, 1),
+                "waktu_idle": round(self.statistik.waktu_idle + berjalan_idle, 1),
             },
         }

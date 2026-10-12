@@ -49,11 +49,10 @@ class ZoneConfig:
 @dataclass
 class ActivityConfig:
     """Aturan state machine aktivitas."""
+    phase_min_seconds: float = 2.0      # kandidat fase harus bertahan ini dulu
     dump_min_seconds: float = 2.5       # truck diam minimal ini -> dianggap menuang
     dig_min_seconds: float = 3.0        # gerak di zona gali minimal ini -> mengguk
-    truck_gone_seconds: float = 4.0     # truck hilang selama ini -> siklus selesai
     idle_seconds: float = 5.0           # tanpa aktivitas selama ini -> idle
-    max_truck_age: float = 1.5          #considered hilang jika tidak terlihat
 
 
 @dataclass

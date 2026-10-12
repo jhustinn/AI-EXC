@@ -9,11 +9,12 @@
     <div class="alert alert-warning d-flex align-items-start gap-2 mb-3 py-2 small">
         <i class="bi bi-exclamation-triangle-fill mt-1"></i>
         <div>
-            <strong>Fase masih inferensi, bukan pengamatan langsung.</strong>
-            Ukuran bucket belum dideteksi, jadi fase <em>Menuangkan</em> berarti
-            dump truck diam di tempat - itu korelasi, bukan bukti bucket
-            benar-benar menuung. Angka confidence di bawah adalah confidence
-            deteksi truck.
+            <strong>Fase adalah inferensi, bukan pengamatan langsung.</strong>
+            Ukuran bucket belum dideteksi. Fase <em>Mengeruk</em> dibaca dari
+            energi gerak di zona gali, dan <em>Menuangkan</em> dari dump truck
+            yang diam - itu korelasi, bukan bukti bucket meng emptying.
+            Siklus dihitung saat satu fase Menuangkan selesai. Angka confidence
+            adalah confidence deteksi truck.
         </div>
     </div>
 
