@@ -4,7 +4,7 @@ __pycache__/
 .env
 .pytest_cache/
 
-# Models and weights
+# Models and weights (besar, diunduh ulang lewat ultralytics)
 *.pt
 models/
 models/*.onnx
@@ -25,7 +25,15 @@ data/demo/
 data/seq/
 config.yaml.bak
 
-# Config CCTV berisi alamat & kredensial kamera -> jangan di-commit.
-# Salin config.cctv.example.yaml menjadi config.cctv.yaml.
-# Kredensial dibaca dari .env (CCTV_USER / CCTV_PASSWORD).
+# Config CCTV berisi alamat & kredensial kamera
 config.cctv.yaml
+
+# Folder referensi (video & screenshot target) - terlalu besar untuk repo
+INGIN SEPERTI INI/
+
+# Installasi Laravel lama (sudah diganti Laravel 13)
+laravel12_bak/
+_l13_tmp/
+
+# Log runtime project
+data/
