@@ -1,16 +1,25 @@
-.venv/
+﻿.venv/
 __pycache__/
 *.pyc
 .env
 .pytest_cache/
 
-# Models and weights (besar, diunduh ulang lewat ultralytics)
-*.pt
-models/
-models/*.onnx
+# Bobot MODEL INI_project ikut di-commit (best.pt ~6 MB, last.pt ~23 MB).
+# Model hasil latih adalah inti proyek; tanpa ini repo tidak berguna.
+!runs/**/weights/*.pt
 
-# Bobot hasil训练 diunggah dari Colab (6 MB), bukan disalin lewat git
+# Bobot milik pihak lain / diunduh ulang otomatis - JANGAN di-commit
+# (GitHub menolak file > 100 MB):
+#   weights/clip/ViT-B-32.pt   338 MB  - CLIP bawaan, auto-download
+#   sam2.1_b.pt                 154 MB  - bobot SAM, percobaan yang gagal
+sam2.1_b.pt
+weights/clip/
+
+# Arsip zip dataset & Roboflow (220 MB + 890 MB, keduanya > 100 MB).
+# Dataset dibangun ulang: python scripts/gabung_dataset.py
 *.zip
+datasets/
+EXCAVATOR MODEL/
 
 # Runtime data & logs
 data/
@@ -19,10 +28,6 @@ data/
 
 # Config CCTV berisi alamat & kredensial kamera
 config.cctv.yaml
-
-# Dataset training hasil ekstraksi frame (220 MB).
-# Dibangun ulang: python scripts/gabung_dataset.py
-datasets/
 
 # Folder referensi (video & screenshot target) - terlalu besar untuk repo
 INGIN SEPERTI INI/
@@ -35,23 +40,34 @@ _l13_tmp/
 *.bak
 *.bak2
 *.bak3
+config.excavator.yaml.bak*
 dbg.py
 x
-config.excavator.yaml.bak*
-
-# Skrip sekali pakai untuk diagnosis (sudah menghasilkan keputusan, tidak
-# perlu disimpan; script yang dipakai ulang ada di scripts/)
-uji_*.py
 to3.py
 fix*.py
 patch*.py
 rm_ab.py
 add_b*.py
-dbg.py
 finish.ps1
+
+# Skrip diagnosis sekali pakai (keputusan sudah tercatat di pesan commit).
+# Script yang dipakai ulang ada di scripts/
+uji_*.py
+dbg.py
 
 # Hasil validasi val (bisa dibangkitkan ulang)
 runs/detect/
-# Dataset Roboflow pengguna (889 MB, CC BY 4.0).
-# Sudah diekstrak ke datasets/ oleh scripts/gabung_dataset.py
-EXCAVATOR MODEL/
+# Bobot model percobaan yang sudah proves gagal / tidak dipakai.
+# Hanya runs/alat_berat_v3 dan weights/plate yang dipakai engine.
+runs/alat_berat_v1/
+runs/alat_berat_v2/
+yolo11n-pose.pt
+yolov8n-pose.pt
+yolov8m-pose.pt
+yolov8m-oiv7.pt
+yolov8s-worldv2.pt
+yolov8n.pt
+
+# Model deteksi wajah - milik proyek CCTV lain, bukan excavator
+models/
+laravel/app/Models/User.php
