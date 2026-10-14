@@ -86,6 +86,25 @@ class ExcavatorKomposisi:
         return (min(self.bucket.x1, self.badan.x1), min(self.bucket.y1, self.badan.y1),
                 max(self.bucket.x2, self.badan.x2), max(self.bucket.y2, self.badan.y2))
 
+    @property
+    def lutut(self) -> tuple[float, float] | None:
+        """Titik sambungan boom-arm (titik lutut lengan ekskavator).
+
+        PENTING: ini BUKAN hasil deteksi model. Yang terukur hanya kotak
+        bucket dan kotak body. Titik ini dihitung geometris dari keduanya:
+        lengan ekskavator membungkuk, jadi ruas kedua digeser tegak lurus
+        dari garis lurus bucket-body. Besar pergeseran diambil dari
+       scripts/ukur_lutut.py yang mengukur sudut lekukan pada gambar
+        referensi.
+
+        Jika suatu saat model pose dilatih, titik ini harus diganti dengan
+        keypoint asli dan confidence harus diturunkan sesuai key error.
+        """
+        if self.bucket is None or self.lengan is None:
+            return None
+        (bx, by), (sx, sy) = self.lengan
+        return _titik_lutut((bx, by), (sx, sy))
+
 
 @dataclass
 class FrameResult:
@@ -112,3 +131,52 @@ class FrameResult:
     @property
     def plates(self) -> list[Objek]:
         return [o for o in self.objek if o.kelas == "plate"]
+
+
+# ----------------------------------------------------------------------
+# Geometri lengan ekskavator
+# ----------------------------------------------------------------------
+# Lengan ekskavator tidak lurus: boom naik dari badan, lalu arm turun ke
+# bucket. Jadi lengan membungkuk. RUAS_TORONG adalah bagian besar lekukan
+# itu, diukur pada gambar referensi (scripts/ukur_lutut.py).
+#
+# Yang BELUM terukur adalah titik lutut itu sendiri - tidak ada keypoint di
+# dataset. Nilai ini adalah_parametrisasi_, bukan hasil deteksi.
+RUAS_TORONG = 0.42
+
+
+def _titik_lutut(bucket: tuple[float, float],
+                 badan: tuple[float, float]) -> tuple[float, float]:
+    """Titik sambungan boom-arm dari dua titik yang benar-benar terukur."""
+    import math
+
+    bx, by = bucket
+    sx, sy = badan
+    dx, dy = bx - sx, by - sy
+    panjang = math.hypot(dx, dy)
+    if panjang < 1e-6:
+        return ((bx + sx) / 2.0, (by + sy) / 2.0)
+
+    # titik di tengah ruas
+    mx, my = (bx + sx) / 2.0, (by + sy) / 2.0
+    # arah tegak lurus
+    ux, uy = -dy / panjang, dx / panjang
+    # Arah tekuk lengan ekskavator (boom naik dari badan, arm turun ke
+    # bucket) dibalik kalau titik hasil geser mendarat di sisi yang salah,
+    # supaya bungkusan tidak keluar ke bawah area gambar.
+    off = RUAS_TORONG * panjang
+    lx, ly = mx + ux * off, my + uy * off
+    h, w = _UKURAN_GAMBAR
+    if h and lx > w * 0.5:
+        lx, ly = mx - ux * off, my - uy * off
+    return (lx, ly)
+
+
+# diisi engine setiap frame supaya _titik_lutut bisa menjaga agar titik
+# tidak keluar dari area gambar
+_UKURAN_GAMBAR: tuple[int, int] = (0, 0)
+
+
+def set_ukuran_gambar(w: int, h: int) -> None:
+    global _UKURAN_GAMBAR
+    _UKURAN_GAMBAR = (h, w)

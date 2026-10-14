@@ -167,11 +167,22 @@ class Engine:
 
         # ekskavator: bucket + lengan penyambung + badan kendaraan
         for e in hasil.ekskavator:
-            # garis lengan hanya bila bucket benar-benar terpasang
-            if e.komponen.get("badan") and e.lengan is not None:
-                cv2.line(vis, (int(e.lengan[0][0]), int(e.lengan[0][1])),
-                         (int(e.lengan[1][0]), int(e.lengan[1][1])),
-                         (168, 85, 247), 4)          # lengan/boom
+            # Lengan digambar sebagai skeleton 2 ruas, bukan garis lurus:
+            # bucket -> lutut -> body. Titik lutut dihitung geometris (lihat
+            # obj ExcavatorKomposisi.lutut) - BUKAN hasil deteksi model,
+            # karena tidak ada kelas/keypoint lengan di model ini.
+            lutut = e.lutut
+            if e.lengan is not None and lutut is not None:
+                (bx_, by_), (sx_, sy_) = e.lengan
+                # ruas bucket -> lutut
+                cv2.line(vis, (int(bx_), int(by_)), (int(lutut[0]), int(lutut[1])),
+                         (168, 85, 247), 4)
+                # ruas lutut -> body
+                cv2.line(vis, (int(lutut[0]), int(lutut[1])), (int(sx_), int(sy_)),
+                         (168, 85, 247), 4)
+                # sendi lutut digambar kecil supaya jelas itu titik sambung
+                cv2.circle(vis, (int(lutut[0]), int(lutut[1])), 5,
+                           (255, 255, 255), -1)
                 cv2.circle(vis, (int(e.badan.cx), int(e.badan.cy)),
                            6, (168, 85, 247), -1)
             if e.bucket is not None:
