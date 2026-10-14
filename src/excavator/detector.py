@@ -16,6 +16,32 @@ JARAK_BUCKET_BADAN = 0.75
 SELISIH_TINGGI_BUCKET = 0.05
 
 
+# ----------------------------------------------------------------------
+# Penyaring kotak yang isinya langit
+# ----------------------------------------------------------------------
+# Bucket ekskavator SELALU kuning/oram/coklat: logam dan tanah. Tidak pernah
+# biru langit. Kotak yang isinya langit adalah false positive - di frame
+# 1452 model memberi conf 0,59 ke kotak berisi aspal dan pohon di antara dua
+# ekskavator, lalu skeleton digambar dari titik yang salah itu.
+#
+# Diukur (ukur_kosong.py): 17 dari 241 kotak bucket (7%) berisi langit.
+# Ambang dipilih longgar supaya hanya warna langit yang ditolak.
+
+
+def _terlihat_langit(gambar, x1, y1, x2, y2) -> bool:
+    """True bila isi kotak didominasi langit-langit."""
+    h, w = gambar.shape[:2]
+    xa, ya = max(0, int(x1)), max(0, int(y1))
+    xb, yb = min(w, int(x2)), min(h, int(y2))
+    if xb - xa < 8 or yb - ya < 8:
+        return False
+    crop = gambar[ya:yb, xa:xb].astype("float32")
+    b, g, r = crop[..., 0].mean(), crop[..., 1].mean(), crop[..., 2].mean()
+    mx, mn = max(b, g, r), min(b, g, r)
+    jenuh = (mx - mn) / max(1.0, mx)
+    return b > r + 15 and b > 110 and jenuh < 0.32
+
+
 class Detector:
     """Deteksi multi-kelas + aturan komposisional ekskavator."""
 
@@ -135,6 +161,17 @@ class Detector:
                 self._hold = None
                 self._hold_mulai = None
 
+        # buang bucket yang kotaknya berisi langit (false positive).
+        # hasil.buckets adalah property read-only, jadi disaring lewat
+        # hasil.objek yang menjadi sumbernya.
+        if hasil.buckets:
+            sky = [b for b in hasil.buckets
+                   if _terlihat_langit(frame, b.x1, b.y1, b.x2, b.y2)]
+            if sky:
+                id_sky = {id(o) for o in sky}
+                hasil.objek = [o for o in hasil.objek
+                               if not (o.kelas == "bucket" and id(o) in id_sky)]
+
         hasil.ekskavator = self._gabung_ekskavator(hasil.buckets, hasil.badan, w, h)
         hasil.ekskavator = self._tahan_ekskavator(hasil.ekskavator)
         hasil.objek.extend(self._deteksi_plat(frame))
@@ -142,7 +179,8 @@ class Detector:
         hasil.infer_ms = (time.perf_counter() - mulai) * 1000.0
         return hasil
 
-    # ------------------------------------------------------------------
+
+# ------------------------------------------------------------------
     def _deteksi_plat(self, frame: np.ndarray) -> list[Objek]:
         """Plat nomor lewat model terpisah.
 
