@@ -1,4 +1,4 @@
-# Konfigurasi mesin deteksi aktivitas alat berat.
+﻿# Konfigurasi mesin deteksi aktivitas alat berat.
 # Tidak ada kredensial di file ini. Untuk RTSP, ambil URL dari environment.
 
 timezone: Asia/Jakarta
@@ -14,16 +14,19 @@ source:
 detector:
   # Model dilatih sendiri untuk bucket + excavator. Truck ikut dilatih dari
   # label otomatis YOLO COCO supaya satu model cukup.
-  model: runs/alat_berat_v1/weights/best.pt
-  confidence: 0.35          # ambang deteksi dipakai
+  model: runs/alat_berat_v3/weights/best.pt
+  confidence: 0.25          # ambang deteksi dipakai (diuji: bucket 46%->50%)
   release_confidence: 0.20  # deteksi sekecil ini masih dipakai untuk posisi
   iou: 0.5
   device: "0"
   imgsz: 640
-  classes: ["bucket", "excavator", "truck"]
-  # Plat nomor kecil, jadi confidence-nya dilonggarkan
-  low_conf_classes: ["plate"]
-  low_conf_floor: 0.18
+  classes: ["excavator", "truck", "bucket"]
+  # Plat nomor memakai model publik terpisah (HuggingFace YOLO11), karena
+  # kelas ini nyaris tidak muncul di video referensi - hanya 1 dari 24 frame
+  # dengan truck terdekat. Melatih dari nol tidak mungkin dengan 1 contoh.
+  plate_model: weights/plate/license-plate-finetune-v1s.pt
+  plate_confidence: 0.40
+  plate_imgsz: 512
   min_width_ratio: 0.15     # abaikan truck kecil di kejauhan
   # Confidence truck di video ini berayun 0,15-0,94 antar frame bersebelahan.
   # Tanpa penahanan, dashboard berkedip "tidak terdeteksi" 10% frame walau

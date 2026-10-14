@@ -35,6 +35,9 @@ class DetectorConfig:
     # Lama kotak ditahan setelah deteksi hilang. Confidence truck di video
     # berayun 0,15-0,94 antar frame, jadi tanpa ini dashboard berkedip.
     hold_seconds: float = 1.5
+    # Penahanan ekskavator. Bodannya besar dan stabil; hanya bucket yang
+    # sering meleset. Tanpa ini satu frame gagal menghapus mesin dari layar.
+    eks_hold_seconds: float = 1.2
     # Kalau kotak ditahan lebih dari ini, tandai sebagai ekstrapolasi.
     hold_mark_seconds: float = 0.8
     # kelas COCO yang dianggap sebagai dump truck
@@ -43,6 +46,13 @@ class DetectorConfig:
     # sendiri, jadi diberi lantai confidence yang lebih longgar.
     low_conf_classes: list[str] = field(default_factory=lambda: ["plate"])
     low_conf_floor: float = 0.18
+    # Plat nomor memakai model terpisah dari HuggingFace karena kelas ini
+    # nyaris tidak muncul di video referensi - hanya 1 dari 24 frame dengan
+    # truck terdekat. Melatih dari nol tidak mungkin; jadi memakai model
+    # publik yang sudah dilatih pada ribuan gambar plat.
+    plate_model: str = "weights/plate/license-plate-finetune-v1l.pt"
+    plate_confidence: float = 0.30
+    plate_imgsz: int = 960
     min_width_ratio: float = 0.15       # abaikan truck kecil di kejauhan
     max_width_ratio: float = 1.0
 

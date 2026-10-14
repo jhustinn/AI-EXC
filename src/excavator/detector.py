@@ -43,7 +43,22 @@ class Detector:
         self.zones = zones
         self._prev_gray: np.ndarray | None = None
         self._hold: Objek | None = None
+        self._hold_eks: ExcavatorKomposisi | None = None
+        self._hold_eks_mulai: float | None = None
         self._hold_mulai: float | None = None
+
+        # Model plat nomor terpisah (HuggingFace). Dimuat opsional supaya
+        # engine tetap jalan kalau berkasnya tidak ada.
+        self._plate = None
+        if cfg.plate_model:
+            p = Path(cfg.plate_model)
+            if not p.is_absolute():
+                p = root / p
+            if p.is_file():
+                from ultralytics import YOLO
+                self._plate = YOLO(str(p))
+            else:
+                self._plate = None
 
     @property
     def class_names(self) -> list[str]:
@@ -121,9 +136,42 @@ class Detector:
                 self._hold_mulai = None
 
         hasil.ekskavator = self._gabung_ekskavator(hasil.buckets, hasil.badan, w, h)
+        hasil.ekskavator = self._tahan_ekskavator(hasil.ekskavator)
+        hasil.objek.extend(self._deteksi_plat(frame))
         hasil.dig_motion = self._gerak_di_zona_gali(frame)
         hasil.infer_ms = (time.perf_counter() - mulai) * 1000.0
         return hasil
+
+    # ------------------------------------------------------------------
+    def _deteksi_plat(self, frame: np.ndarray) -> list[Objek]:
+        """Plat nomor lewat model terpisah.
+
+        Plat nyaris tidak terlihat di video referensi, jadi kelas ini tidak
+        dilatih bersama model utama. Model publik dipakai apa adanya.
+        """
+        if self._plate is None:
+            return []
+        try:
+            res = self._plate.predict(
+                frame, conf=self.cfg.plate_confidence,
+                imgsz=self.cfg.plate_imgsz,
+                device=self.cfg.device, verbose=False,
+            )[0]
+        except Exception:  # noqa: BLE001
+            return []
+        if res.boxes is None or len(res.boxes) == 0:
+            return []
+
+        hasil: list[Objek] = []
+        for box, cf in zip(res.boxes.xyxy.cpu().numpy(),
+                           res.boxes.conf.cpu().numpy()):
+            x1, y1, x2, y2 = [float(v) for v in box]
+            if x2 <= x1 or y2 <= y1:
+                continue
+            hasil.append(Objek("plate", x1, y1, x2, y2, float(cf)))
+        # plat paling yakin dulu
+        hasil.sort(key=lambda o: -o.conf)
+        return hasil[:3]
 
     # ------------------------------------------------------------------
     def _gabung_ekskavator(self, buckets: list[Objek], badan: list[Objek],
@@ -135,8 +183,13 @@ class Detector:
         tubuh mesin di bawahnya tetap dihitung sebagai ekskavator - dengan
         confidence lebih rendah karena tidak ada konfirmasi badan.
         """
-        if not buckets:
+        if not buckets and not badan:
             return []
+
+        # Badan ekskavator yang terlihat jelas HARUS dihitung, walau bucket
+        # tidak terdeteksi. Sebelumnya `if not buckets: return []` membuat
+        # seluruh ekskavator hilang begitu bucket meleset - padahal badan
+        # mesinnya ada di layar. Dilakukan di bawah, setelah pairing.
 
         # badan hasil deteksi langsung
         kandidat_badan: list[Objek | None] = list(badan)
@@ -172,7 +225,57 @@ class Detector:
                     conf=round(b.conf * 0.5, 4),
                     komponen={"bucket": True, "lengan": False, "badan": False},
                 ))
+
+        # Badan yang tersisa (terlihat, tapi tidak punya bucket yang terpasang).
+        # HANYA bila tidak ada bucket sama sekali di frame ini. Kalau bucket
+        # ada, badan sisa sudah terwakili oleh ekskavator hasil pairing di atas
+        # - menghitung lagi akan membuat satu mesin appear dua kali.
+        for i, s in enumerate(kandidat_badan):
+            if s is None or i in dipakai or buckets:
+                continue
+            # confident sedikit diturunkan: tidak ada konfirmasi bucket
+            hasil.append(ExcavatorKomposisi(
+                bucket=None, badan=s,
+                lengan=None,
+                conf=round(s.conf * 0.75, 4),
+                komponen={"bucket": False, "lengan": False, "badan": True},
+            ))
         return hasil
+
+    # ------------------------------------------------------------------
+    def _tahan_ekskavator(
+            self, hasil: list[ExcavatorKomposisi]) -> list[ExcavatorKomposisi]:
+        """Penahanan sementara untuk ekskavator.
+
+        Truck punya hold dan hasilnya konsisten 100%. Ekskavator tidak punya,
+        padahal形状 badannya besar dan stabil - hanya bucket yang kecil dan
+        sering meleset. Tanpa hold, satu frame gagal langsung menghapus mesin
+        yang jelas ada di layar (terukur: 63 flicker dalam 2035 frame).
+
+        Confidence diturunkan bertahap selama masa tahan, jadi kotak yang
+        ditahan tidak pernah diklaim sama dengan deteksi segar.
+        """
+        now = time.monotonic()
+        if hasil:
+            self._hold_eks = max(hasil, key=lambda e: e.conf)
+            self._hold_eks_mulai = now
+            return hasil
+
+        if self._hold_eks is None or self._hold_eks_mulai is None:
+            return []
+        umur = now - self._hold_eks_mulai
+        if umur > self.cfg.eks_hold_seconds:
+            self._hold_eks = None
+            self._hold_eks_mulai = None
+            return []
+
+        sisa = 1.0 - umur / self.cfg.eks_hold_seconds
+        e = self._hold_eks
+        return [ExcavatorKomposisi(
+            bucket=e.bucket, badan=e.badan, lengan=e.lengan,
+            conf=round(e.conf * 0.6 * sisa, 4),
+            komponen={**e.komponen, "ditahan": True},
+        )]
 
     @staticmethod
     def _bertumpuk(a: Objek, b: Objek) -> bool:

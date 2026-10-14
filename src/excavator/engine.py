@@ -106,12 +106,21 @@ class Engine:
                 ok, frame = cap.read()
                 if not ok:
                     if self.cfg.source.kind == "video" and self.cfg.source.loop:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        # cap.set(POS_FRAMES) menggantung di Windows untuk MP4,
+                        # jadi lebih aman membuka ulang filenya
+                        cap.release()
+                        cap = _buka(self.cfg)
                         self.detector.reset()
+                        time.sleep(0.05)
                         continue
                     self.error = "sumber frame berhenti"
                     break
-                self._process(frame)
+                try:
+                    self._process(frame)
+                except Exception as exc:
+                    import traceback
+                    self.error = f"{type(exc).__name__}: {exc}"
+                    traceback.print_exc()
 
                 jeda = 1.0 / target_fps - (time.perf_counter() - mulai)
                 if jeda > 0:
@@ -158,13 +167,17 @@ class Engine:
 
         # ekskavator: bucket + lengan penyambung + badan kendaraan
         for e in hasil.ekskavator:
-            if e.komponen.get("badan"):
+            # garis lengan hanya bila bucket benar-benar terpasang
+            if e.komponen.get("badan") and e.lengan is not None:
                 cv2.line(vis, (int(e.lengan[0][0]), int(e.lengan[0][1])),
                          (int(e.lengan[1][0]), int(e.lengan[1][1])),
                          (168, 85, 247), 4)          # lengan/boom
                 cv2.circle(vis, (int(e.badan.cx), int(e.badan.cy)),
                            6, (168, 85, 247), -1)
-            bx1, by1, bx2, by2 = [int(v) for v in e.bucket.bbox]
+            if e.bucket is not None:
+                bx1, by1, bx2, by2 = [int(v) for v in e.bucket.bbox]
+            else:
+                bx1, by1, bx2, by2 = [int(v) for v in e.badan.bbox]
             cv2.rectangle(vis, (bx1, by1), (bx2, by2), (168, 85, 247), 2)
             cv2.putText(vis, f"excavator {e.conf:.2f}", (bx1, max(16, by1 - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55 * skala, (168, 85, 247), 2)
@@ -219,9 +232,10 @@ class Engine:
         baris = [
             (f"FASE: {FASE_LABEL[Fase(fase)].upper()}", warna),
             (f"truck conf: {trucks[0].conf:.2f}" if trucks else "truck: tidak terdeteksi", (245, 158, 11)),
-            (f"bucket: {eks.bucket.conf:.2f}" if eks else "bucket: tidak terdeteksi", (34, 197, 94)),
+            (f"bucket: {eks.bucket.conf:.2f}" if (eks and eks.bucket is not None) else ("tidak ada" if eks else "tidak terdeteksi"), (34, 197, 94)),
             (f"excavator: {eks.conf:.2f}" if eks else "excavator: tidak", (168, 85, 247)),
         ]
+        tinggi = int(28 * skala * (1 + len(baris)))
         for i, (teks, c) in enumerate(baris):
             cv2.putText(vis, teks, (pad, int((26 + i * 26) * skala)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55 * skala, c, 2)

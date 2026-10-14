@@ -56,6 +56,10 @@ class Objek:
     def ke_yolo(self) -> tuple[float, float, float, float]:
         return (self.cx, self.cy, self.w, self.h)
 
+    @property
+    def bbox(self) -> tuple[float, float, float, float]:
+        return (self.x1, self.y1, self.x2, self.y2)
+
     def dump_zone(self, zc: ZoneConfig) -> tuple[float, float, float, float]:
         """Zona tuang = pintu bak di bagian atas bbox truck."""
         top = self.y1 + self.h * zc.dump_top_ratio
@@ -66,15 +70,19 @@ class Objek:
 @dataclass
 class ExcavatorKomposisi:
     """Ekskavator hasil aturan: bucket + lengan penyambung + badan kendaraan."""
-    bucket: Objek
+    bucket: Objek | None
     badan: Objek
-    # ruas garis_bucket ke badan, yaitu lengan/boom ekskavator
-    lengan: tuple[tuple[float, float], tuple[float, float]]
+    # ruas garis bucket ke badan, yaitu lengan/boom ekskavator.
+    # None bila bucket tidak terdeteksi - badan ekskavator tetap dihitung
+    # karena mesinnya benar-benar terlihat di layar.
+    lengan: tuple[tuple[float, float], tuple[float, float]] | None
     conf: float
     komponen: dict[str, bool] = field(default_factory=dict)
 
     @property
     def bbox(self) -> tuple[float, float, float, float]:
+        if self.bucket is None:
+            return self.badan.bbox
         return (min(self.bucket.x1, self.badan.x1), min(self.bucket.y1, self.badan.y1),
                 max(self.bucket.x2, self.badan.x2), max(self.bucket.y2, self.badan.y2))
 

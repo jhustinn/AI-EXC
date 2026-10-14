@@ -8,28 +8,20 @@ __pycache__/
 *.pt
 models/
 models/*.onnx
-models/*.pt
+
+# Bobot hasil训练 diunggah dari Colab (6 MB), bukan disalin lewat git
+*.zip
 
 # Runtime data & logs
-data/*.log*
-data/*.err*
-data/*.jpg
-data/*.png
-data/events.csv
-data/last_frame.jpg
-data/reload_faces.flag
-data/screenshots/
-data/tracker_*.yaml
-data/samples/
-data/demo/
-data/seq/
-config.yaml.bak
+data/
+*.log
+*.err
 
 # Config CCTV berisi alamat & kredensial kamera
 config.cctv.yaml
 
-# Dataset training hasil ekstraksi frame (28 MB JPEG).
-# Bisa dibangkitkan ulang dari video dengan scripts/build_dataset.py
+# Dataset training hasil ekstraksi frame (220 MB).
+# Dibangun ulang: python scripts/gabung_dataset.py
 datasets/
 
 # Folder referensi (video & screenshot target) - terlalu besar untuk repo
@@ -39,5 +31,27 @@ INGIN SEPERTI INI/
 laravel12_bak/
 _l13_tmp/
 
-# Log runtime project
-data/
+# Sisa percobaan patch satu-off & file sementara
+*.bak
+*.bak2
+*.bak3
+dbg.py
+x
+config.excavator.yaml.bak*
+
+# Skrip sekali pakai untuk diagnosis (sudah menghasilkan keputusan, tidak
+# perlu disimpan; script yang dipakai ulang ada di scripts/)
+uji_*.py
+to3.py
+fix*.py
+patch*.py
+rm_ab.py
+add_b*.py
+dbg.py
+finish.ps1
+
+# Hasil validasi val (bisa dibangkitkan ulang)
+runs/detect/
+# Dataset Roboflow pengguna (889 MB, CC BY 4.0).
+# Sudah diekstrak ke datasets/ oleh scripts/gabung_dataset.py
+EXCAVATOR MODEL/
