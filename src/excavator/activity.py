@@ -92,6 +92,12 @@ class Status:
 class ActivityMachine:
     """Mengubah (truck terdeteksi, energi gerak) menjadi fase dan KPI."""
 
+    # Grace period: truck boleh hilang sebanyak ini detik tanpa mereset
+    # timer "diam". Confidence truck berayun liar (0.15-0.94 antar frame
+    # bersebelahan), jadi satu-dua frame tanpa deteksi seharusnya tidak
+    # menghapus fakta bahwa truck memang sedang parkir di situ.
+    _TRUCK_GRACE_SECONDS = 3.0
+
     def __init__(self, cfg: ActivityConfig, zones: ZoneConfig):
         self.cfg = cfg
         self.zones = zones
@@ -106,10 +112,15 @@ class ActivityMachine:
         self._kandidat: Fase | None = None
         self._kandidat_mulai: datetime = datetime.now(timezone.utc)
         self._siklus_ke = 0
+        # Waktu terakhir truck benar-benar terdeteksi, untuk grace period.
+        self._truck_terakhir_terlihat: datetime | None = None
+        # Simpan posisi truck terakhir supaya bisa menghitung diam walau
+        # truck sempat hilang sebentar (confidence anjlok 1-2 frame).
+        self._truck_terakhir_box: tuple[float, float, float, float] | None = None
 
     # ---------- internal ----------
 
-    def _truck_diam(self, truck: Truck) -> bool:
+    def _truck_diam(self, truck: Objek) -> bool:
         """Dua pembacaan berturut dengan posisi mirip berarti truck diam."""
         if self._posisi_akhir is None:
             self._posisi_akhir = (truck.cx, truck.cy)
@@ -206,14 +217,23 @@ class ActivityMachine:
             self.status.bucket_di_zona_gali = di_zona_gali
 
         bucket_ada = bucket is not None
-        gali_aktif = (bucket_ada and di_zona_gali and bucket_rendah) or (
-            motion >= self.zones.motion_threshold and not bucket_ada
-        )
         self.status.sumber_sinyal = "bucket" if bucket_ada else (
             "truck" if truck else "zona_gali"
         )
 
-        if truck:
+        # Cek apakah excavator dalam Mode Boom POV / video portrait dashcam
+        is_boom_pov = (bucket is not None and bucket.y1 > h * 0.60 and bucket.w > w * 0.50) or (w < h)
+
+        # ----------------------------------------------------------
+        # Logika truck diam DENGAN GRACE PERIOD
+        # ----------------------------------------------------------
+        # Pada Dashcam POV kamera ikut berputar bersama kabin/house, jadi truck hilang segera saat swing.
+        grace_seconds = 0.6 if is_boom_pov else self._TRUCK_GRACE_SECONDS
+        truck_hadir = truck is not None  # terdeteksi frame ini
+
+        if truck_hadir:
+            self._truck_terakhir_terlihat = sekarang
+            self._truck_terakhir_box = truck.bbox
             diam = self._truck_diam(truck)
             if diam:
                 if self._mulai_diam is None:
@@ -221,35 +241,134 @@ class ActivityMachine:
             else:
                 self._mulai_diam = None
         else:
-            self._mulai_diam = None
-            self._posisi_akhir = None
+            # Truck hilang frame ini — cek apakah masih dalam grace period
+            if self._truck_terakhir_terlihat is not None:
+                hilang_detik = (sekarang - self._truck_terakhir_terlihat).total_seconds()
+                if hilang_detik > grace_seconds:
+                    # Benar-benar hilang — reset semua
+                    self._mulai_diam = None
+                    self._posisi_akhir = None
+                    self._truck_terakhir_terlihat = None
+                    self._truck_terakhir_box = None
+            else:
+                self._mulai_diam = None
+                self._posisi_akhir = None
+
+        # "truck_aktif" = truck terdeteksi sekarang ATAU masih dalam grace period
+        truck_aktif = truck_hadir or (
+            self._truck_terakhir_terlihat is not None
+            and (sekarang - self._truck_terakhir_terlihat).total_seconds() <= grace_seconds
+        )
 
         diam_cukup = (
-            truck is not None
+            truck_aktif
             and self._mulai_diam is not None
             and (sekarang - self._mulai_diam).total_seconds() >= self.cfg.dump_min_seconds
         )
-        gali_aktif = motion >= self.zones.motion_threshold
 
-        # -------- tentukan kandidat fase --------
-        # Urutan penting. Excavator tetap bisa mengguk walau truck sudah
-        # terparkir di tempat, jadi gerak di zona gali didahulukan. Menuangkan
-        # baru/bootstrap kalau zona gali justru tenang.
-        if gali_aktif:
-            kandidat = Fase.MENGKERUK
-        elif diam_cukup:
+        # -------------------------------------------------------------
+        # Deteksi Fase Berbasis Kinematika & Geometri Nyata (Mengeruk & Menuangkan)
+        # -------------------------------------------------------------
+        eks = hasil.ekskavator[0] if hasil.ekskavator else None
+
+        target_b_cx = bucket.cx if bucket is not None else (eks.wrist[0] if (eks and eks.wrist) else None)
+        target_b_cy = bucket.cy if bucket is not None else (eks.wrist[1] if (eks and eks.wrist) else None)
+
+        is_dumping = False
+        is_digging = False
+
+        # Cek apakah excavator dalam Mode Boom POV (kamera kabin menatap langsung pit galian / portrait dashcam)
+        is_boom_pov = (bucket is not None and bucket.y1 > h * 0.60 and bucket.w > w * 0.50) or (w < h)
+
+        # 1. Evaluasi MENUANGKAN (Dumping ke bak dump truck aktif)
+        has_left_truck = False
+        has_right_truck = False
+
+        if is_boom_pov:
+            # Pada Dashcam Cabin / Boom POV:
+            # Bila dump truck hadir di depan kabin / boom -> fase dumping (MENUANGKAN)
+            if truck_aktif or (truck is not None):
+                is_dumping = True
+            else:
+                # Bila dump truck tidak ada (menghadap ke area pit galian gelap)
+                is_digging = True
+        elif target_b_cx is not None and target_b_cy is not None:
+            trucks_ref = list(trucks) if trucks else []
+            if not trucks_ref and truck_aktif and self._truck_terakhir_box is not None:
+                bx = self._truck_terakhir_box
+                trucks_ref = [Objek("truck", bx[0], bx[1], bx[2], bx[3], 0.0)]
+
+            # Klasifikasikan truk kerja aktif (diabaikan jika truk kecil di kejauhan)
+            truk_kerja = [t for t in trucks_ref if t.w >= 0.11 * w]
+            has_left_truck = any(t.cx < 0.50 * w for t in truk_kerja)
+            has_right_truck = any(t.cx >= 0.50 * w for t in truk_kerja)
+
+            # A. Cek apakah bucket berada di atas bak dump truck kerja yang terdeteksi
+            for t in truk_kerja:
+                margin_x = max(60.0, t.w * 0.25)
+                # Bucket harus berada di koridor bak truk dan tidak di bawah roda
+                if (t.x1 - margin_x <= target_b_cx <= t.x2 + margin_x) and (target_b_cy <= t.y2 + 40.0):
+                    is_dumping = True
+                    break
+
+            # B. Fallback zona tuang HANYA jika memang ada truk kerja di sisi tersebut
+            if not is_dumping:
+                if has_left_truck and (0.16 * w <= target_b_cx <= 0.48 * w) and (0.15 * h <= target_b_cy <= 0.65 * h):
+                    is_dumping = True
+                elif has_right_truck and (target_b_cx >= 0.70 * w) and (0.25 * h <= target_b_cy <= 0.85 * h):
+                    is_dumping = True
+
+        # 2. Evaluasi MENGERUK (Digging di pit galian / tebing / tumpukan material)
+        if not is_dumping:
+            if is_boom_pov:
+                is_digging = True
+            elif target_b_cx is not None and target_b_cy is not None:
+                # Pengerukan: bucket berada di dasar/tanah (y >= 0.50*h) ATAU di dinding tebing kiri
+                if target_b_cy >= 0.50 * h:
+                    if has_right_truck and not has_left_truck:
+                        # Jika truk di kanan, semua aktivitas di kiri & tengah (x < 0.68*w) adalah pengerukan
+                        if target_b_cx < 0.68 * w:
+                            is_digging = True
+                    elif has_left_truck:
+                        # Jika truk di kiri, pengerukan di tebing kiri (x < 0.16*w) atau dasar pit dalam
+                        if target_b_cx < 0.16 * w or target_b_cy >= 0.70 * h or target_b_cx >= 0.55 * w:
+                            is_digging = True
+                    else:
+                        is_digging = True
+                elif target_b_cx < 0.16 * w:
+                    # Dinding tebing galian kiri atas
+                    is_digging = True
+                elif motion >= self.zones.motion_threshold:
+                    is_digging = True
+
+        # 3. Klasifikasi Urutan Fase Siklus
+        if is_dumping:
             kandidat = Fase.MENUANGKAN
-        elif truck:
-            kandidat = (Fase.KEMBALI if self.status.fase is Fase.MENUANGKAN
-                        else Fase.MENGANGKAT)
-        else:
-            kandidat = Fase.MEMUTAR
-
-        ada_aktivitas = bool(truck) or gali_aktif
-        if ada_aktivitas:
             self._terakhir_aktivitas = sekarang
-        elif (sekarang - self._terakhir_aktivitas).total_seconds() >= self.cfg.idle_seconds:
-            kandidat = Fase.IDLE
+        elif is_digging:
+            kandidat = Fase.MENGKERUK
+            self._terakhir_aktivitas = sekarang
+        elif target_b_cx is not None and target_b_cy is not None:
+            if self.status.fase is Fase.MENUANGKAN:
+                kandidat = Fase.KEMBALI
+            elif self.status.fase is Fase.KEMBALI:
+                if target_b_cx < 0.50 * w:
+                    kandidat = Fase.MENGKERUK if (target_b_cy >= 0.38 * h or motion >= self.zones.motion_threshold) else Fase.KEMBALI
+                else:
+                    kandidat = Fase.KEMBALI
+            elif self.status.fase in (Fase.MENGKERUK, Fase.MENGANGKAT):
+                if target_b_cy < 0.38 * h and target_b_cx < 0.52 * w:
+                    kandidat = Fase.MENGANGKAT
+                else:
+                    kandidat = Fase.MEMUTAR
+            else:
+                kandidat = Fase.MEMUTAR
+            self._terakhir_aktivitas = sekarang
+        else:
+            if (sekarang - self._terakhir_aktivitas).total_seconds() >= self.cfg.idle_seconds:
+                kandidat = Fase.IDLE
+            else:
+                kandidat = Fase.MEMUTAR
 
         self._ganti_fase(self._stabil(kandidat, sekarang), sekarang, conf, motion, hasil)
 

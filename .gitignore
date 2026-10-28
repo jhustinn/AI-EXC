@@ -1,4 +1,4 @@
-﻿.venv/
+.venv/
 __pycache__/
 *.pyc
 .env
@@ -71,3 +71,22 @@ yolov8n.pt
 # Model deteksi wajah - milik proyek CCTV lain, bukan excavator
 models/
 laravel/app/Models/User.php
+
+# File gambar debug & crop sementara di root
+*.jpg
+*.jpeg
+*.png
+!laravel/public/**/*.png
+!laravel/public/**/*.jpg
+scratch/
+video/
+
+# Pretrained generic YOLO weights & model eksperimen
+yolo*.pt
+yolov*.pt
+weights/yolo*.pt
+!runs/**/weights/*.pt
+!weights/plate/*.pt
+
+# Training runs artifacts
+runs/excavator_parts/

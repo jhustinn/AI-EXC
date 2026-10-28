@@ -1,37 +1,36 @@
-﻿# Konfigurasi mesin deteksi aktivitas alat berat.
+# Konfigurasi mesin deteksi aktivitas alat berat.
 # Tidak ada kredensial di file ini. Untuk RTSP, ambil URL dari environment.
 
 timezone: Asia/Jakarta
 unit: EXC-07
 
 source:
-  # kind: video (uji, pakai file lokal) atau rtsp (kamera produksi)
-  kind: video
-  path: "INGIN SEPERTI INI/WhatsApp Video 2026-10-10 at 10.43.03 AM2.mp4"
-  loop: true
-  fps: 10
+  # kind: http (Raspberry Pi Zero W Dashcam live stream)
+  kind: http
+  path: "http://192.168.1.40:8080/stream.mjpg"
+  url: "http://192.168.1.40:8080/stream.mjpg"
+  loop: false
+  fps: 30
+  width: 640
+  height: 480
+  ffmpeg: false
 
 detector:
+  view: cabin               # cabin (dashcam boom POV) | external (profile CCTV)
   # Model dilatih sendiri untuk bucket + excavator. Truck ikut dilatih dari
   # label otomatis YOLO COCO supaya satu model cukup.
-  model: runs/alat_berat_v3/weights/best.pt
-  confidence: 0.25          # ambang deteksi dipakai (diuji: bucket 46%->50%)
-  release_confidence: 0.20  # deteksi sekecil ini masih dipakai untuk posisi
-  iou: 0.5
+  model: runs/alat_berat_v4/weights/best.pt
+  confidence: 0.18          # ambang deteksi dipakai (diuji: truck/bucket 18-25%)
+  release_confidence: 0.12  # deteksi sekecil ini masih dipakai untuk posisi
+  iou: 0.45
   device: "0"
-  imgsz: 640
+  imgsz: 512
   classes: ["excavator", "truck", "bucket"]
-  # Plat nomor memakai model publik terpisah (HuggingFace YOLO11), karena
-  # kelas ini nyaris tidak muncul di video referensi - hanya 1 dari 24 frame
-  # dengan truck terdekat. Melatih dari nol tidak mungkin dengan 1 contoh.
   plate_model: weights/plate/license-plate-finetune-v1s.pt
   plate_confidence: 0.40
   plate_imgsz: 512
-  min_width_ratio: 0.15     # abaikan truck kecil di kejauhan
-  # Confidence truck di video ini berayun 0,15-0,94 antar frame bersebelahan.
-  # Tanpa penahanan, dashboard berkedip "tidak terdeteksi" 10% frame walau
-  # truck jelas ada. Kotak ditahan maksimal ini detik.
-  hold_seconds: 1.5
+  min_width_ratio: 0.14     # abaikan objek sempit
+  hold_seconds: 1.5         # kurangi penahanan agar tidak ada kotak hantu
   hold_mark_seconds: 0.8
 
 zones:
@@ -40,18 +39,12 @@ zones:
   # zona tuang mengikuti bbox truck -> pintu bak di bagian atas
   dump_top_ratio: 0.12
   dump_height_ratio: 0.60
-  # Energi gerak di zona gali yang dianggap "mengguk". Ambang ini diambil dari
-  # median hasil pengukuran (scripts/ukur_gerak.py): rentang motion 0,00-0,69,
-  # median 0,09-0,13. Ambang di tengah-tengah supaya sinyal benar-benar
-  # terbagi, bukan asal angka.
-  motion_threshold: 0.09
+  motion_threshold: 0.08
 
 activity:
-  phase_min_seconds: 2.0    # kandidat fase harus bertahan ini dulu (debounce)
-  dump_min_seconds: 2.5     # truck diam sebegitu -> fase Menuangkan
-  dig_min_seconds: 3.0      # gerak di zona gali sebegitu -> fase Mengeruk
-  # Bucket dianggap mengguk bila di zona gali dan posisinya di bagian bawah
-  # frame (0 = atas, 1 = bawah).
+  phase_min_seconds: 0.8    # transisi fase responsif (0.8 detik debounce)
+  dump_min_seconds: 1.2     # truck diam sebegitu -> fase Menuangkan
+  dig_min_seconds: 2.0      # gerak di zona gali sebegitu -> fase Mengeruk
   bucket_low_ratio: 0.55
   idle_seconds: 5.0
 
@@ -62,5 +55,6 @@ store:
 server:
   host: "127.0.0.1"
   port: 8010                # 8000 dipakai aplikasi lain di mesin ini
-  stream_fps: 12
-  stream_quality: 72
+  stream_fps: 32
+  stream_quality: 68
+  stream_width: 800

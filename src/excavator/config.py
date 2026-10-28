@@ -25,6 +25,7 @@ class SourceConfig:
 @dataclass
 class DetectorConfig:
     model: str = "yolov8n.pt"
+    view: str = "cabin"                 # cabin (dashcam POV) | external (profile CCTV)
     confidence: float = 0.35
     # Ambang pelepasan. Ambul confidence turun masih diterima selama kotak
     # ditahan, supaya truck tidak berkedip hilang-hilang di frame bersebelahan.
@@ -53,6 +54,9 @@ class DetectorConfig:
     plate_model: str = "weights/plate/license-plate-finetune-v1l.pt"
     plate_confidence: float = 0.30
     plate_imgsz: int = 960
+    truck_confidence: float = 0.35
+    arm_confidence: float = 0.35
+    arm_swing_threshold: float = 0.05
     min_width_ratio: float = 0.15       # abaikan truck kecil di kejauhan
     max_width_ratio: float = 1.0
 
@@ -111,6 +115,50 @@ class Config:
     def resolve(self, value: str) -> Path:
         p = Path(value)
         return p if p.is_absolute() else self.project_root / p
+
+    def apply_profile(self, profile_dict: dict) -> None:
+        """Terapkan pola deteksi, triggers, dan zona dari profil master."""
+        if not profile_dict:
+            return
+        det = profile_dict.get('detector', {})
+        if 'confidence' in det:
+            self.detector.confidence = float(det['confidence'])
+        if 'release_confidence' in det:
+            self.detector.release_confidence = float(det['release_confidence'])
+        if 'hold_seconds' in det:
+            self.detector.hold_seconds = float(det['hold_seconds'])
+        if 'min_width_ratio' in det:
+            self.detector.min_width_ratio = float(det['min_width_ratio'])
+        if 'truck_confidence' in det:
+            self.detector.truck_confidence = float(det['truck_confidence'])
+        if 'arm_confidence' in det:
+            self.detector.arm_confidence = float(det['arm_confidence'])
+        if 'arm_swing_threshold' in det:
+            self.detector.arm_swing_threshold = float(det['arm_swing_threshold'])
+        if 'plate_confidence' in det:
+            self.detector.plate_confidence = float(det['plate_confidence'])
+
+        zones = profile_dict.get('zones', {})
+        if 'dig' in zones and isinstance(zones['dig'], (list, tuple)) and len(zones['dig']) == 4:
+            self.zones.dig = [float(x) for x in zones['dig']]
+        if 'dump_top_ratio' in zones:
+            self.zones.dump_top_ratio = float(zones['dump_top_ratio'])
+        if 'dump_height_ratio' in zones:
+            self.zones.dump_height_ratio = float(zones['dump_height_ratio'])
+        if 'motion_threshold' in zones:
+            self.zones.motion_threshold = float(zones['motion_threshold'])
+
+        act = profile_dict.get('activity', {})
+        if 'dig_min_seconds' in act:
+            self.activity.dig_min_seconds = float(act['dig_min_seconds'])
+        if 'dump_min_seconds' in act:
+            self.activity.dump_min_seconds = float(act['dump_min_seconds'])
+        if 'phase_min_seconds' in act:
+            self.activity.phase_min_seconds = float(act['phase_min_seconds'])
+        if 'idle_seconds' in act:
+            self.activity.idle_seconds = float(act['idle_seconds'])
+        if 'bucket_low_ratio' in act:
+            self.activity.bucket_low_ratio = float(act['bucket_low_ratio'])
 
 
 def _build(cls, data: dict[str, Any] | None):

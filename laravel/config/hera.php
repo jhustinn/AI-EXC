@@ -20,7 +20,7 @@ return [
 
     'stream_url' => env('PYTHON_STREAM_URL', 'http://127.0.0.1:8010'),
 
-    'api_timeout' => (int) env('PYTHON_API_TIMEOUT', 5),
+    'api_timeout' => (float) env('PYTHON_API_TIMEOUT', 1.5),
 
     'unit' => env('HERA_DEFAULT_UNIT', 'EXC-07'),
 

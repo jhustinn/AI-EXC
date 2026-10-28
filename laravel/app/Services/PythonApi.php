@@ -72,7 +72,8 @@ class PythonApi
     private function get(string $path): array
     {
         try {
-            $resp = Http::timeout((int) config('hera.api_timeout'))
+            $resp = Http::connectTimeout(0.8)
+                ->timeout((float) config('hera.api_timeout', 1.5))
                 ->acceptJson()
                 ->get(rtrim(config('hera.api_url'), '/') . $path);
 

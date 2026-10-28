@@ -78,6 +78,10 @@ class ExcavatorKomposisi:
     lengan: tuple[tuple[float, float], tuple[float, float]] | None
     conf: float
     komponen: dict[str, bool] = field(default_factory=dict)
+    lutut_pt: tuple[float, float] | None = None
+    wrist_pt: tuple[float, float] | None = None
+    tip_pt: tuple[float, float] | None = None
+    base_pt: tuple[float, float] | None = None
 
     @property
     def bbox(self) -> tuple[float, float, float, float]:
@@ -87,23 +91,81 @@ class ExcavatorKomposisi:
                 max(self.bucket.x2, self.badan.x2), max(self.bucket.y2, self.badan.y2))
 
     @property
-    def lutut(self) -> tuple[float, float] | None:
-        """Titik sambungan boom-arm (titik lutut lengan ekskavator).
+    def base(self) -> tuple[float, float] | None:
+        """Titik pangkal boom pada badan ekskavator (boom base pivot)."""
+        if self.base_pt is not None:
+            return self.base_pt
+        h, w = _UKURAN_GAMBAR
+        lutut_pt = self.lutut
 
-        PENTING: ini BUKAN hasil deteksi model. Yang terukur hanya kotak
-        bucket dan kotak body. Titik ini dihitung geometris dari keduanya:
-        lengan ekskavator membungkuk, jadi ruas kedua digeser tegak lurus
-        dari garis lurus bucket-body. Besar pergeseran diambil dari
-       scripts/ukur_lutut.py yang mengukur sudut lekukan pada gambar
-        referensi.
+        # Bila sudut kamera boom-mounted (lutut dekat puncak tengah)
+        if w and h and lutut_pt is not None:
+            lx, ly = lutut_pt
+            if ly < 0.15 * h and abs(lx - 0.5 * w) < 0.20 * w:
+                return (w * 0.49, 0.0)
 
-        Jika suatu saat model pose dilatih, titik ini harus diganti dengan
-        keypoint asli dan confidence harus diturunkan sesuai key error.
-        """
-        if self.bucket is None or self.lengan is None:
+        if self.badan is not None:
+            if lutut_pt is not None:
+                lx, ly = lutut_pt
+                if lx <= self.badan.cx:
+                    # Boom mengarah ke kiri: pangkal boom di sisi turret tengah
+                    sx = self.badan.x1 + self.badan.w * 0.44
+                    sy = self.badan.y1 + self.badan.h * 0.43
+                else:
+                    # Boom mengarah ke kanan: pangkal boom di sisi turret depan kabin
+                    sx = self.badan.x1 + self.badan.w * 0.46
+                    sy = self.badan.y1 + self.badan.h * 0.50
+                return (sx, sy)
+            return (self.badan.cx, self.badan.y1 + self.badan.h * 0.30)
+
+        # Bila kabin ekskavator di luar layar (off-screen sebelah kanan),
+        # boom melintas turun ke arah kanan bawah (ke arah kedudukan kabin).
+        h, w = _UKURAN_GAMBAR
+        if w and self.lutut is not None:
+            lx, ly = self.lutut
+            base_x = float(w - 10)
+            base_y = min(float(h - 50), ly + (base_x - lx) * 0.55)
+            return (base_x, base_y)
+        elif self.bucket is not None and w:
+            return (float(w - 10), min(float(h - 50), self.bucket.cy - 50.0))
+        return None
+
+    @property
+    def wrist(self) -> tuple[float, float] | None:
+        """Titik sendi pergelangan bucket (sambungan arm ke bucket)."""
+        if self.wrist_pt is not None:
+            return self.wrist_pt
+        if self.bucket is None:
             return None
-        (bx, by), (sx, sy) = self.lengan
-        return _titik_lutut((bx, by), (sx, sy))
+        return (self.bucket.cx, self.bucket.y1)
+
+    @property
+    def tip(self) -> tuple[float, float] | None:
+        """Titik ujung pengeruk / gigi bucket."""
+        if self.tip_pt is not None:
+            return self.tip_pt
+        if self.bucket is None:
+            return None
+        return (self.bucket.cx, self.bucket.y2)
+
+    @property
+    def lutut(self) -> tuple[float, float] | None:
+        """Titik sambungan boom-arm (titik lutut / siku lengan ekskavator).
+
+        Dideteksi langsung dari puncak lekukan boom pada citra (warna kuning
+        alat berat). Bila citra tidak tersedia, dihitung dengan kinematika
+        lengan ekskavator di mana puncak lekukan boom selalu berada di atas
+        garis bucket-body.
+        """
+        if self.lutut_pt is not None:
+            return self.lutut_pt
+        if self.lengan is None:
+            if self.bucket is not None and self.badan is not None:
+                return _titik_lutut((self.bucket.cx, self.bucket.cy),
+                                    (self.badan.cx, self.badan.cy))
+            return None
+        pt1, pt2 = self.lengan
+        return _titik_lutut(pt1, pt2)
 
 
 @dataclass
@@ -136,47 +198,65 @@ class FrameResult:
 # ----------------------------------------------------------------------
 # Geometri lengan ekskavator
 # ----------------------------------------------------------------------
-# Lengan ekskavator tidak lurus: boom naik dari badan, lalu arm turun ke
-# bucket. Jadi lengan membungkuk. RUAS_TORONG adalah bagian besar lekukan
-# itu, diukur pada gambar referensi (scripts/ukur_lutut.py).
-#
-# Yang BELUM terukur adalah titik lutut itu sendiri - tidak ada keypoint di
-# dataset. Nilai ini adalah_parametrisasi_, bukan hasil deteksi.
-RUAS_TORONG = 0.42
 
-
-def _titik_lutut(bucket: tuple[float, float],
-                 badan: tuple[float, float]) -> tuple[float, float]:
-    """Titik sambungan boom-arm dari dua titik yang benar-benar terukur."""
-    import math
-
-    bx, by = bucket
-    sx, sy = badan
-    dx, dy = bx - sx, by - sy
-    panjang = math.hypot(dx, dy)
-    if panjang < 1e-6:
-        return ((bx + sx) / 2.0, (by + sy) / 2.0)
-
-    # titik di tengah ruas
-    mx, my = (bx + sx) / 2.0, (by + sy) / 2.0
-    # arah tegak lurus
-    ux, uy = -dy / panjang, dx / panjang
-    # Arah tekuk lengan ekskavator (boom naik dari badan, arm turun ke
-    # bucket) dibalik kalau titik hasil geser mendarat di sisi yang salah,
-    # supaya bungkusan tidak keluar ke bawah area gambar.
-    off = RUAS_TORONG * panjang
-    lx, ly = mx + ux * off, my + uy * off
-    h, w = _UKURAN_GAMBAR
-    if h and lx > w * 0.5:
-        lx, ly = mx - ux * off, my - uy * off
-    return (lx, ly)
-
-
-# diisi engine setiap frame supaya _titik_lutut bisa menjaga agar titik
-# tidak keluar dari area gambar
 _UKURAN_GAMBAR: tuple[int, int] = (0, 0)
+_FRAME_CITRA: np.ndarray | None = None
 
 
 def set_ukuran_gambar(w: int, h: int) -> None:
     global _UKURAN_GAMBAR
     _UKURAN_GAMBAR = (h, w)
+
+
+def set_frame_citra(frame: np.ndarray | None) -> None:
+    global _FRAME_CITRA
+    _FRAME_CITRA = frame
+
+
+def _titik_lutut(bucket: tuple[float, float],
+                 badan: tuple[float, float]) -> tuple[float, float]:
+    """Titik sambungan boom-arm dari citra atau kinematika."""
+    import math
+
+    bx, by = bucket
+    sx, sy = badan
+    h, w = _UKURAN_GAMBAR
+
+    # 1. Deteksi presisi dari puncak kontur boom pada citra asli (warna kuning khas alat berat)
+    if _FRAME_CITRA is not None:
+        try:
+            hsv = cv2.cvtColor(_FRAME_CITRA, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, np.array([12, 60, 60]), np.array([38, 255, 255]))
+            x1 = max(0, int(min(bx, sx) - 50))
+            x2 = min(_FRAME_CITRA.shape[1], int(max(bx, sx) + 50))
+            y1 = 0
+            y2 = min(_FRAME_CITRA.shape[0], int(max(by, sy)))
+            roi = np.zeros_like(mask)
+            roi[y1:y2, x1:x2] = mask[y1:y2, x1:x2]
+            pts = cv2.findNonZero(roi)
+            if pts is not None and len(pts) > 30:
+                pts = pts.reshape(-1, 2)
+                sorted_y = pts[pts[:, 1].argsort()]
+                top = sorted_y[:max(8, int(len(sorted_y) * 0.02))]
+                elbow_x = float(np.median(top[:, 0]))
+                elbow_y = float(np.median(top[:, 1]))
+                if elbow_y < min(by, sy) - 10:
+                    if h and w:
+                        elbow_x = min(max(elbow_x, 0.0), float(w - 1))
+                        elbow_y = min(max(elbow_y, 0.0), float(h - 1))
+                    return (elbow_x, elbow_y)
+        except Exception:
+            pass
+
+    # 2. Kinematika fallback: lengan ekskavator selalu melengkung ke atas
+    dx, dy = bx - sx, by - sy
+    panjang = math.hypot(dx, dy)
+    if panjang < 1e-6:
+        return ((bx + sx) / 2.0, (by + sy) / 2.0)
+
+    elbow_x = (bx + sx) / 2.0 - 0.1 * panjang
+    elbow_y = min(by, sy) - 0.45 * panjang
+    if h and w:
+        elbow_x = min(max(elbow_x, 0.0), float(w - 1))
+        elbow_y = min(max(elbow_y, 10.0), float(h - 1))
+    return (float(elbow_x), float(elbow_y))
